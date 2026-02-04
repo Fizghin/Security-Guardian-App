@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+# numpy<2.0
+opencv-python
+ultralytics
+sqlalchemy
+python-multipart
+python-jose[cryptography]
+websockets
+pydantic
+requests
+python-dotenv
+openai
+ollama
+# deepface
+tf-keras
