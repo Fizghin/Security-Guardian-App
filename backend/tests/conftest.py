@@ -21,7 +21,8 @@ os.environ["PUBLIC_URL"] = ""
 os.environ["AI_PROVIDER"] = "ollama"
 os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:9"
 os.environ.pop("DATABASE_URL", None)
-for key in ("DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK", "SMTP_USER", "SMTP_PASSWORD", "ALERT_EMAIL"):
+for key in ("DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK", "SMTP_USER", "SMTP_PASSWORD", "ALERT_EMAIL", "TELEGRAM_BOT_TOKEN",
+            "TELEGRAM_CHAT_ID", "NTFY_URL", "NTFY_TOKEN", "WEBHOOK_URL"):
     os.environ[key] = ""
 # Face models are a 38 MB download; keep the test run offline.
 (_data_dir / "settings.json").write_text(json.dumps({"detection": {"face_recognition": False}}))

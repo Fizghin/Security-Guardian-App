@@ -17,7 +17,7 @@ from services.camera_service import camera_manager
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import FaceError, face_service
-from services.notification_service import notification_service
+from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
 from services.settings_service import PHONE_SOURCE, SettingsError, new_token, settings_service
@@ -529,6 +529,9 @@ def patch_settings(patch: dict):
     patch.pop("cameras", None)  # cameras have their own endpoints
     if isinstance(patch.get("ai"), dict):
         patch["ai"].pop("api_key_set", None)
+    if isinstance(patch.get("notifications"), dict):
+        for key in [k for k in patch["notifications"] if k.endswith("_set")]:
+            patch["notifications"].pop(key)
     try:
         settings_service.update(patch)
     except SettingsError as exc:
@@ -591,7 +594,14 @@ def notifications_status():
 
 @router.post("/notifications/test")
 async def notifications_test():
-    status = notification_service.status()
-    if not (status["discord"] or status["email"]):
-        raise HTTPException(409, "No notification channel configured. Set DISCORD_WEBHOOK_URL or SMTP_* in backend/.env")
+    if not notification_service.status()["any"]:
+        raise HTTPException(409, "No alert channel is set up yet. Fill in one below and save first.")
     return {"results": await run_in_threadpool(notification_service.send_test)}
+
+
+@router.get("/notifications/telegram/chats")
+async def telegram_chats(token: str = ""):
+    try:
+        return {"chats": await run_in_threadpool(notification_service.telegram_chats, token)}
+    except ChannelError as exc:
+        raise HTTPException(502, str(exc))

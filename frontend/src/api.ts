@@ -249,10 +249,32 @@ export interface Settings {
   }
   phone: { fps: number; max_width: number; quality: number }
   schedule: { enabled: boolean; rules: ScheduleRule[] }
+  notifications: {
+    discord_webhook_set: boolean
+    telegram_token_set: boolean
+    telegram_chat_id: string
+    ntfy_url: string
+    ntfy_token_set: boolean
+    webhook_url_set: boolean
+    smtp_host: string
+    smtp_port: number
+    smtp_user: string
+    smtp_password_set: boolean
+    email_to: string
+  }
+}
+
+/** Write-only values: the dashboard can set or clear them but never reads them back. */
+export interface NotificationSecrets {
+  discord_webhook?: string
+  telegram_token?: string
+  ntfy_token?: string
+  webhook_url?: string
+  smtp_password?: string
 }
 
 type Section = Exclude<keyof Settings, 'armed' | 'cameras'>
-export type SettingsPatch = { [K in Section]?: Partial<Settings[K]> & { api_key?: string } }
+export type SettingsPatch = { [K in Section]?: Partial<Settings[K]> & { api_key?: string } & NotificationSecrets }
 
 export interface AITestResult {
   text: string
@@ -284,7 +306,7 @@ export interface SystemInfo {
   siren: Status['siren']
   faces: FaceStatus
   ai: AIStatus
-  notifications: { discord: boolean; email: boolean; email_to: string | null }
+  notifications: { discord: boolean; telegram: boolean; ntfy: boolean; webhook: boolean; email: boolean; any: boolean; email_to: string | null }
   phone: { enabled: boolean; port: number; addresses: string[]; public_url: string }
 }
 
@@ -397,6 +419,8 @@ export const api = {
   aiTest: (level: number, speak: boolean) => request<AITestResult>('/api/ai/test', json('POST', { level, speak })),
 
   system: () => request<SystemInfo>('/api/system'),
+  telegramChats: (token = '') =>
+    request<{ chats: { id: string; name: string; type: string }[] }>(`/api/notifications/telegram/chats?token=${encodeURIComponent(token)}`),
   testNotifications: () =>
     request<{ results: { channel: string; ok: boolean; error: string | null }[] }>('/api/notifications/test', json('POST')),
 }

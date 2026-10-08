@@ -397,7 +397,7 @@ class CameraManager:
         if not units:
             return
         ctx = units[0].brain.context(4, manual=True)
-        ctx.alerted = self.notifier.status()["discord"] or self.notifier.status()["email"]
+        ctx.alerted = self.notifier.status()["any"]
         cached = self.ai.take_cached(ctx)
         if cached:
             self._broadcast({"text": cached, "source": "cached"})
@@ -437,8 +437,7 @@ class CameraManager:
     def warning_contexts(self) -> list[WarningContext]:
         """The situations each level will be in, so their first line can be written in advance."""
         esc = self.settings.get().escalation
-        notify = self.notifier.status()
-        can_alert = notify["discord"] or notify["email"]
+        can_alert = self.notifier.status()["any"]
         siren_ok = siren_service.available or any(u.cfg.is_phone and u.cfg.audio != "server" for u in self.units.values())
         out = [WarningContext(level=level, recording=level >= esc.record_at_level,
                               alerted=can_alert and level >= esc.alert_at_level,

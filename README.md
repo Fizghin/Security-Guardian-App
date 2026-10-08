@@ -1,6 +1,6 @@
 # Guardian
 
-A home/office CCTV system that runs entirely on your own computer. It watches webcams, IP cameras and **old phones turned into cameras**, recognises the people who belong there, talks to strangers using a **local language model**, escalates to a siren if they stay, records clips and can alert you on Discord or by e-mail. No cloud services are required.
+A home/office CCTV system that runs entirely on your own computer. It watches webcams, IP cameras and **old phones turned into cameras**, recognises the people who belong there, talks to strangers using a **local language model**, escalates to a siren if they stay, records clips and alerts you on your phone (Telegram, ntfy push, Discord, e-mail or a webhook). No cloud services are required.
 
 ## What it does
 
@@ -138,18 +138,17 @@ Turn on **Greet recognised people by name** (Settings → Voice) to have Guardia
 
 ## Alerts
 
-Set these in `backend/.env` (copied from `backend/.env.template` by the installer) and restart:
+Settings → **Notifications** sends alerts with a picture when someone reaches the alert level (level 3 by default), followed by the clip once it is saved. Use any combination:
 
-```ini
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASSWORD=your-app-password
-ALERT_EMAIL=where-to-send@example.com
-```
+| Channel | Setup |
+|---|---|
+| **Telegram** | Create a bot with @BotFather, paste its token, send the bot a message, then press **Find chat**. Alerts arrive as photos. |
+| **ntfy** | Install the ntfy app, subscribe to a long, hard-to-guess topic (**Suggest** makes one) and paste its address. Free push notifications without an account; a self-hosted ntfy server works too. |
+| **Discord** | Paste a channel webhook URL. |
+| **E-mail** | Any SMTP account. For Gmail use an app password. |
+| **Webhook** | Guardian POSTs JSON (`title`, `message`, `severity`, `time`, `snapshot_jpeg_base64`) for Home Assistant, Node-RED, n8n and the like. |
 
-Settings → Notifications → **Send test** checks them.
+**Send test** shows the result for each channel. Tokens, passwords and webhook addresses are stored in `backend/storage/settings.json` and never sent back to the dashboard. They can also be preset in `backend/.env` (see `.env.template`).
 
 ## Where data lives
 

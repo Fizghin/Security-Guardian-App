@@ -456,7 +456,7 @@ function EscalationSection({ value, save, sirenAvailable }: { value: Settings['e
         <Field label="Start recording at">
           <LevelSelect value={d.draft.record_at_level} onChange={(v) => d.set('record_at_level', v)} />
         </Field>
-        <Field label="Alert the owner at" hint="Discord and/or e-mail, see Notifications">
+        <Field label="Alert the owner at" hint="Through the channels under Notifications">
           <LevelSelect value={d.draft.alert_at_level} onChange={(v) => d.set('alert_at_level', v)} />
         </Field>
       </div>
@@ -511,48 +511,213 @@ function RecordingSection({ value, save, encoder }: { value: Settings['recording
 }
 
 // ---- Notifications ---------------------------------------------------------------------------
-function NotificationsSection({ status }: { status?: { discord: boolean; email: boolean; email_to: string | null } }) {
+type Notifications = Settings['notifications']
+type SecretKey = 'discord_webhook' | 'telegram_token' | 'ntfy_token' | 'webhook_url' | 'smtp_password'
+const CHANNEL_NAMES: Record<string, string> = { discord: 'Discord', telegram: 'Telegram', ntfy: 'ntfy', webhook: 'Webhook', email: 'E-mail' }
+
+const notificationDraft = (n: Notifications) => ({
+  telegram_chat_id: n.telegram_chat_id,
+  ntfy_url: n.ntfy_url,
+  smtp_host: n.smtp_host,
+  smtp_port: n.smtp_port,
+  smtp_user: n.smtp_user,
+  email_to: n.email_to,
+  // Secrets start empty; typing one replaces the saved value
+  discord_webhook: '',
+  telegram_token: '',
+  ntfy_token: '',
+  webhook_url: '',
+  smtp_password: '',
+})
+
+function Channel({ name, ready, children, hint }: { name: string; ready: boolean; children: ReactNode; hint: ReactNode }) {
+  return (
+    <div className="space-y-3 rounded-md border border-zinc-800 p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <Dot className={ready ? 'bg-emerald-500' : 'bg-zinc-600'} /> {name}
+        <span className="text-xs font-normal text-zinc-500">{ready ? 'On' : 'Off'}</span>
+      </div>
+      {children}
+      <p className="hint">{hint}</p>
+    </div>
+  )
+}
+
+function NotificationsSection({ value, save }: { value: Notifications; save: Save }) {
   const notify = useToast()
-  const [busy, setBusy] = useState(false)
+  const d = useDraft(notificationDraft(value))
+  const [testing, setTesting] = useState(false)
+  const [results, setResults] = useState<{ channel: string; ok: boolean; error: string | null }[] | null>(null)
+  const [chats, setChats] = useState<{ id: string; name: string; type: string }[] | null>(null)
+  const [finding, setFinding] = useState(false)
+
+  const ready = {
+    telegram: (value.telegram_token_set || !!d.draft.telegram_token) && !!d.draft.telegram_chat_id,
+    ntfy: !!d.draft.ntfy_url,
+    discord: value.discord_webhook_set || !!d.draft.discord_webhook,
+    email: !!d.draft.smtp_user && (value.smtp_password_set || !!d.draft.smtp_password) && !!d.draft.email_to,
+    webhook: value.webhook_url_set || !!d.draft.webhook_url,
+  }
+
+  const secret = (key: SecretKey, label: string, placeholder: string, hidden = true) => {
+    const saved = value[`${key}_set`]
+    return (
+      <Field label={label}>
+        <div className="flex gap-2">
+          <input
+            type={hidden ? 'password' : 'text'}
+            autoComplete="off"
+            spellCheck={false}
+            className="input"
+            value={d.draft[key]}
+            placeholder={saved ? 'Saved; type to replace' : placeholder}
+            onChange={(e) => d.set(key, e.target.value)}
+          />
+          {saved && !d.draft[key] && (
+            <Button variant="ghost" onClick={() => save({ notifications: { [key]: '' } })}>
+              Remove
+            </Button>
+          )}
+        </div>
+      </Field>
+    )
+  }
+
   const test = async () => {
-    setBusy(true)
+    setTesting(true)
+    setResults(null)
     try {
-      const { results } = await api.testNotifications()
-      for (const r of results) notify(r.ok ? `${r.channel}: test sent` : `${r.channel}: ${r.error}`, r.ok ? 'success' : 'error')
+      setResults((await api.testNotifications()).results)
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
-      setBusy(false)
+      setTesting(false)
     }
   }
+
+  const findChat = async () => {
+    setFinding(true)
+    try {
+      const found = (await api.telegramChats(d.draft.telegram_token)).chats
+      if (found.length === 1) d.set('telegram_chat_id', found[0].id)
+      else if (!found.length) notify('No messages yet. Send your bot any message in Telegram, then try again.', 'error')
+      setChats(found.length > 1 ? found : null)
+    } catch (err) {
+      notify(errorMessage(err), 'error')
+    } finally {
+      setFinding(false)
+    }
+  }
+
+  const suggestTopic = () => {
+    const random = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(36).padStart(2, '0')).join('')
+    d.set('ntfy_url', `https://ntfy.sh/guardian-${random}`)
+  }
+
   return (
     <Section
       id="notifications"
       title="Notifications"
-      description="Alerts include a snapshot; when the clip is saved it is sent as well. Credentials are set in backend/.env and never pass through the dashboard."
+      description="Where alerts go when someone reaches the alert level, with a picture; the clip follows once it is saved. Use as many as you like."
+      dirty={d.dirty}
+      onReset={() => {
+        d.reset()
+        setChats(null)
+      }}
+      onSave={() => save({ notifications: d.changes })}
       extraActions={
-        <Button icon={<Send className="h-4 w-4" />} loading={busy} disabled={!status || (!status.discord && !status.email)} onClick={test}>
+        <Button icon={<Send className="h-4 w-4" />} loading={testing} disabled={d.dirty || !Object.values(ready).some(Boolean)} onClick={test} title={d.dirty ? 'Save first' : undefined}>
           Send test
         </Button>
       }
     >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-md border border-zinc-800 p-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Dot className={status?.discord ? 'bg-emerald-500' : 'bg-zinc-600'} /> Discord
+      {results && (
+        <ul className="space-y-1 rounded-md border border-zinc-800 p-3 text-sm">
+          {results.map((r) => (
+            <li key={r.channel} className="flex gap-2">
+              <Dot className={cx('mt-1.5', r.ok ? 'bg-emerald-500' : 'bg-red-500')} />
+              <span className="font-medium">{CHANNEL_NAMES[r.channel] ?? r.channel}</span>
+              <span className={r.ok ? 'text-zinc-400' : 'text-red-400'}>{r.ok ? 'Test sent' : r.error}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="grid items-start gap-3 xl:grid-cols-2">
+        <Channel
+          name="Telegram"
+          ready={ready.telegram}
+          hint={<>In Telegram, create a bot with <span className="font-mono">@BotFather</span> and paste its token. Then send your bot any message and press Find chat.</>}
+        >
+          {secret('telegram_token', 'Bot token', '123456789:AA…')}
+          <Field label="Chat">
+            <div className="flex gap-2">
+              <input className="input" value={d.draft.telegram_chat_id} placeholder="Chat id" onChange={(e) => d.set('telegram_chat_id', e.target.value)} />
+              <Button loading={finding} disabled={!value.telegram_token_set && !d.draft.telegram_token} onClick={findChat}>
+                Find chat
+              </Button>
+            </div>
+          </Field>
+          {chats && (
+            <div className="flex flex-wrap gap-2">
+              {chats.map((c) => (
+                <Button
+                  key={c.id}
+                  size="sm"
+                  variant={d.draft.telegram_chat_id === c.id ? 'primary' : 'secondary'}
+                  onClick={() => {
+                    d.set('telegram_chat_id', c.id)
+                    setChats(null)
+                  }}
+                >
+                  {c.name}
+                </Button>
+              ))}
+            </div>
+          )}
+        </Channel>
+        <Channel
+          name="ntfy (phone push)"
+          ready={ready.ntfy}
+          hint="Install the ntfy app, subscribe to a long, hard-to-guess topic and paste its address here. Anyone who knows the topic can read the alerts."
+        >
+          <Field label="Topic address">
+            <div className="flex gap-2">
+              <input className="input" spellCheck={false} value={d.draft.ntfy_url} placeholder="https://ntfy.sh/your-topic" onChange={(e) => d.set('ntfy_url', e.target.value)} />
+              {!d.draft.ntfy_url && <Button onClick={suggestTopic}>Suggest</Button>}
+            </div>
+          </Field>
+          {secret('ntfy_token', 'Access token (optional)', 'Only for protected topics')}
+        </Channel>
+        <Channel name="Discord" ready={ready.discord} hint="Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.">
+          {secret('discord_webhook', 'Webhook URL', 'https://discord.com/api/webhooks/…', false)}
+        </Channel>
+        <Channel name="E-mail" ready={ready.email} hint="For Gmail, use an app password (Google account → Security → App passwords), not your normal password.">
+          <div className="grid gap-3 sm:grid-cols-[1fr_7rem]">
+            <Field label="Mail server">
+              <input className="input" value={d.draft.smtp_host} onChange={(e) => d.set('smtp_host', e.target.value)} />
+            </Field>
+            <Field label="Port">
+              <NumberInput value={d.draft.smtp_port} min={1} max={65535} onChange={(v) => d.set('smtp_port', v)} />
+            </Field>
           </div>
-          <p className="mt-1 text-xs text-zinc-500">{status?.discord ? 'Webhook configured' : <>Set <span className="font-mono">DISCORD_WEBHOOK_URL</span></>}</p>
-        </div>
-        <div className="rounded-md border border-zinc-800 p-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Dot className={status?.email ? 'bg-emerald-500' : 'bg-zinc-600'} /> E-mail
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Sign in as">
+              <input className="input" autoComplete="off" value={d.draft.smtp_user} placeholder="you@gmail.com" onChange={(e) => d.set('smtp_user', e.target.value)} />
+            </Field>
+            {secret('smtp_password', 'Password', 'App password')}
           </div>
-          <p className="mt-1 text-xs text-zinc-500">
-            {status?.email ? `Sends to ${status.email_to}` : <>Set <span className="font-mono">SMTP_USER</span>, <span className="font-mono">SMTP_PASSWORD</span> and <span className="font-mono">ALERT_EMAIL</span></>}
-          </p>
-        </div>
+          <Field label="Send alerts to">
+            <input className="input" type="email" value={d.draft.email_to} placeholder="you@example.com" onChange={(e) => d.set('email_to', e.target.value)} />
+          </Field>
+        </Channel>
+        <Channel
+          name="Webhook"
+          ready={ready.webhook}
+          hint={<>Guardian POSTs JSON with <span className="font-mono">title</span>, <span className="font-mono">message</span>, <span className="font-mono">severity</span>, <span className="font-mono">time</span> and <span className="font-mono">snapshot_jpeg_base64</span>. Works with Home Assistant, Node-RED or n8n.</>}
+        >
+          {secret('webhook_url', 'Address', 'https://…', false)}
+        </Channel>
       </div>
-      <p className="hint">Restart Guardian after editing backend/.env.</p>
     </Section>
   )
 }
@@ -661,7 +826,7 @@ export default function SettingsPage({ section }: { section: string }) {
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />
         <EscalationSection key={k(settings.escalation)} value={settings.escalation} save={save} sirenAvailable={status?.siren.available} />
         <RecordingSection key={k(settings.recording)} value={settings.recording} save={save} encoder={sys.data?.recording_encoder} />
-        <NotificationsSection status={sys.data?.notifications} />
+        <NotificationsSection key={k(settings.notifications)} value={settings.notifications} save={save} />
         <SystemSection />
       </div>
     </div>

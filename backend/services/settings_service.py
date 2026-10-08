@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import threading
-from typing import Callable, Literal
+from typing import Callable, ClassVar, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -136,6 +136,35 @@ class ScheduleSettings(BaseModel):
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
 
 
+class NotificationSettings(BaseModel):
+    discord_webhook: str = ""
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
+    ntfy_url: str = ""  # topic URL, e.g. https://ntfy.sh/some-secret-topic
+    ntfy_token: str = ""
+    webhook_url: str = ""
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = Field(587, ge=1, le=65535)
+    smtp_user: str = ""
+    smtp_password: str = ""
+    email_to: str = ""
+
+    # Never sent to the dashboard; it only learns whether they are set
+    SECRETS: ClassVar[tuple[str, ...]] = ("discord_webhook", "telegram_token", "ntfy_token", "smtp_password", "webhook_url")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("discord_webhook", "ntfy_url", "webhook_url")
+    @classmethod
+    def _url(cls, value: str):
+        if value and not value.startswith(("https://", "http://")):
+            raise ValueError("must be a web address starting with https://")
+        return value
+
+
 class Settings(BaseModel):
     armed: bool = True
     cameras: list[CameraConfig] = [CameraConfig(id="cam1", name="Camera 1")]
@@ -145,6 +174,7 @@ class Settings(BaseModel):
     ai: AISettings = AISettings()
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
+    notifications: NotificationSettings = NotificationSettings()
 
     @field_validator("cameras")
     @classmethod
@@ -179,6 +209,19 @@ def _env_defaults() -> dict:
             "base_url": base_url,
             "model": model,
             "api_key": env_str("OPENAI_API_KEY"),
+        },
+        "notifications": {
+            "discord_webhook": env_str("DISCORD_WEBHOOK_URL") or env_str("DISCORD_WEBHOOK"),
+            "telegram_token": env_str("TELEGRAM_BOT_TOKEN"),
+            "telegram_chat_id": env_str("TELEGRAM_CHAT_ID"),
+            "ntfy_url": env_str("NTFY_URL"),
+            "ntfy_token": env_str("NTFY_TOKEN"),
+            "webhook_url": env_str("WEBHOOK_URL"),
+            "smtp_host": env_str("SMTP_HOST", "smtp.gmail.com"),
+            "smtp_port": int(env_str("SMTP_PORT", "587")) if env_str("SMTP_PORT", "587").isdigit() else 587,
+            "smtp_user": env_str("SMTP_USER"),
+            "smtp_password": env_str("SMTP_PASSWORD"),
+            "email_to": env_str("ALERT_EMAIL"),
         },
     }
 
@@ -325,9 +368,11 @@ class SettingsService:
         os.replace(tmp, self.path)
 
     def public(self) -> dict:
-        """Settings as sent to the dashboard (the model API key is never echoed back)."""
+        """Settings as sent to the dashboard: secrets become *_set flags and are never echoed back."""
         data = self.get().model_dump()
         data["ai"]["api_key_set"] = bool(data["ai"].pop("api_key"))
+        for key in NotificationSettings.SECRETS:
+            data["notifications"][f"{key}_set"] = bool(data["notifications"].pop(key))
         return data
 
 
