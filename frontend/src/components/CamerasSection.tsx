@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Battery, BatteryCharging, Copy, FileVideo, Pencil, Plus, QrCode, ScanSearch, Smartphone, Trash2, Usb, Wifi } from 'lucide-react'
+import { Battery, BatteryCharging, Copy, FileVideo, Pencil, Plus, QrCode, ScanSearch, Smartphone, SquareDashed, Trash2, Usb, Wifi } from 'lucide-react'
 import { api, type AudioOutput, type CameraConfig, type CameraStatus, type Pairing, type Settings, type SourceKind } from '../api'
 import { cx } from '../lib/cx'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { Badge, Button, Card, ConfirmDialog, Dot, ErrorNote, Field, Modal, Slider } from './ui'
+import ZoneEditor from './ZoneEditor'
 
 const KIND_ICON: Record<SourceKind, typeof Usb> = {
   phone: Smartphone,
@@ -511,6 +512,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<CameraConfig | null>(null)
   const [pairing, setPairing] = useState<CameraConfig | null>(null)
+  const [zoning, setZoning] = useState<CameraConfig | null>(null)
   const [removing, setRemoving] = useState<CameraConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [phoneDraft, setPhoneDraft] = useState(phoneSettings)
@@ -590,6 +592,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
                 </div>
                 <div className="mt-0.5 truncate text-xs text-zinc-500" title={c.source}>
                   {sourceSummary(c)} · {c.enabled ? <LiveState live={live} /> : 'Turned off'}
+                  {c.zones.length > 0 && ` · ${c.zones.length} zone${c.zones.length === 1 ? '' : 's'}`}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
@@ -598,6 +601,9 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
                     Pair
                   </Button>
                 )}
+                <Button size="sm" variant="ghost" icon={<SquareDashed className="h-4 w-4" />} onClick={() => setZoning(c)} title="Choose where people count">
+                  Zones
+                </Button>
                 <Button size="sm" variant="ghost" onClick={() => toggle(c)}>
                   {c.enabled ? 'Turn off' : 'Turn on'}
                 </Button>
@@ -636,6 +642,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
 
       <AddCameraDialog open={adding} count={cams?.length ?? 0} onClose={() => setAdding(false)} onAdded={changed} />
       <EditCameraDialog key={editing?.id ?? ''} camera={editing} onClose={() => setEditing(null)} onSaved={changed} />
+      {zoning && <ZoneEditor key={zoning.id} camera={zoning} onClose={() => setZoning(null)} onSaved={changed} />}
       <Modal open={!!pairing} onClose={() => setPairing(null)} title={`Pair ${pairing?.name ?? ''}`} wide>
         {pairing && <PairingPanel camera={pairing} onReset={load} />}
       </Modal>

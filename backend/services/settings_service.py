@@ -36,6 +36,20 @@ class CameraConfig(BaseModel):
     token: str = ""
     # Where warnings and the siren play: this computer, the phone itself, or both.
     audio: Literal["server", "device", "both"] = "server"
+    # Areas where people count: polygons of [x, y] corners in 0..1. Empty = the whole picture.
+    zones: list[list[list[float]]] = Field(default_factory=list)
+
+    @field_validator("zones")
+    @classmethod
+    def _zones(cls, zones: list[list[list[float]]]):
+        if len(zones) > 8:
+            raise ValueError("At most 8 zones per camera")
+        for polygon in zones:
+            if not 3 <= len(polygon) <= 32:
+                raise ValueError("A zone needs 3 to 32 corners")
+            if any(len(p) != 2 or not (0 <= p[0] <= 1 and 0 <= p[1] <= 1) for p in polygon):
+                raise ValueError("Zone corners must lie inside the picture")
+        return [[[round(x, 4), round(y, 4)] for x, y in polygon] for polygon in zones]
 
     @property
     def is_phone(self) -> bool:

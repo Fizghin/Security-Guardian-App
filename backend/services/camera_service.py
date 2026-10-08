@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 
 import cv2
+import numpy as np
 
 from models.domain import Detection
 from services.ai_service import WarningContext, ai_service
@@ -32,6 +33,7 @@ from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
 from services.sources import CaptureSource, parse_source
 from services.tracker import FaceEvidence, Tracker
+from services.zones import keep_in_zones
 
 # Avoid oversubscribing the CPU: OpenCV, PyTorch and the language model all default to one
 # thread per core, and fighting over cores makes every one of them slower.
@@ -42,12 +44,17 @@ HEARTBEAT_SECONDS = 2.0  # run detection at least this often even without motion
 BOX_HOLD_SECONDS = 1.5
 
 RED, GREEN, AMBER, GREY, BLUE = (40, 40, 220), (90, 180, 60), (0, 170, 240), (150, 150, 150), (230, 160, 60)
+ZONE = (230, 230, 160)  # detection zone outlines, light cyan
 
 
-def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool):
+def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool, zones=()):
     # Text and lines scale with the frame so labels stay readable on HD cameras.
     scale = max(0.5, frame.shape[1] / 1100)
     thick = max(1, round(scale * 1.5))
+    h, w = frame.shape[:2]
+    for zone in zones:
+        points = np.array([[int(x * w), int(y * h)] for x, y in zone], dtype=np.int32)
+        cv2.polylines(frame, [points], True, ZONE, thick, cv2.LINE_AA)
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.bbox)
         if d.simulated:
@@ -68,7 +75,6 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
                     (255, 255, 255), thick, cv2.LINE_AA)
 
     stamp = f"{camera_name}  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    h = frame.shape[0]
     (tw, th), base = cv2.getTextSize(stamp, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, thick)
     pad = int(5 * scale)
     cv2.rectangle(frame, (pad, h - th - base - 3 * pad), (tw + 3 * pad, h - pad), (0, 0, 0), -1)
@@ -173,8 +179,13 @@ class CameraUnit:
             return self.latest_jpeg()[0]
         if judging[2] is None:
             frame, detections = judging[0], judging[1]
-            judging[2] = self._encode(draw_overlay(frame.copy(), detections, self.name(), self.settings.get().armed))
+            judging[2] = self._encode(draw_overlay(frame.copy(), detections, self.name(), self.settings.get().armed,
+                                                   self.cfg.zones))
         return judging[2]
+
+    def raw_snapshot(self) -> bytes | None:
+        raw = self.latest_raw()
+        return None if raw is None else self._encode(raw)
 
     @staticmethod
     def _encode(annotated) -> bytes | None:
@@ -229,7 +240,7 @@ class CameraUnit:
                     self._detect(frame, now, cfg, simulating)
 
                 shown = self._detections if now - self._detections_time < BOX_HOLD_SECONDS else []
-                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed)
+                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones)
                 jpeg = self._encode(annotated)
                 with self._lock:
                     self._annotated, self._raw = annotated, frame
@@ -249,6 +260,7 @@ class CameraUnit:
     def _detect(self, frame, now: float, cfg: Settings, simulating: bool) -> None:
         det = cfg.detection
         detections = self.detector.detect_persons(frame, det.confidence, det.min_person_height)
+        detections = keep_in_zones(detections, frame.shape[1], frame.shape[0], self.cfg.zones)
         recognition = det.face_recognition and self.faces.active
         evidence = self.faces.analyze(frame, detections, det.face_match_threshold) if recognition \
             else [FaceEvidence() for _ in detections]

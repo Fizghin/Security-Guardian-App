@@ -113,6 +113,8 @@ export interface CameraConfig {
   audio: AudioOutput
   kind: SourceKind
   token?: string
+  /** Areas where people count: polygons of [x, y] corners in 0..1. Empty = the whole picture. */
+  zones: number[][][]
 }
 
 export interface SecurityEvent {
@@ -364,7 +366,7 @@ export const api = {
   cameras: () => request<{ cameras: CameraConfig[]; phone: SystemInfo['phone'] }>('/api/cameras'),
   addCamera: (body: { name: string; source: string; audio?: AudioOutput }) =>
     request<CameraConfig>('/api/cameras', json('POST', body)),
-  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio'>>) =>
+  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio' | 'zones'>>) =>
     request<CameraConfig>(cam(id), json('PATCH', body)),
   deleteCamera: (id: string) => request<{ ok: boolean }>(cam(id), { method: 'DELETE' }),
   resetPhoneLink: (id: string) => request<CameraConfig>(`${cam(id)}/reset-link`, json('POST')),
@@ -376,6 +378,7 @@ export const api = {
     request<{ ok: boolean; seconds: number }>(`${cam(id)}/test-intrusion`, json('POST', { seconds })),
   cameraFaces: (id: string) => request<{ faces: LiveFace[] }>(`${cam(id)}/faces`),
   snapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg`,
+  rawSnapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg?raw=1&t=${Date.now()}`,
   streamUrl: (id: string) =>
     `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/stream/${encodeURIComponent(id)}`,
 

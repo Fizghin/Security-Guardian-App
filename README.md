@@ -119,6 +119,10 @@ Only time the person is actually on camera counts. The incident ends 10 s after 
 
 Timings, which levels record, alert and sound the siren, and the voice's personality are all set in Settings.
 
+### Detection zones
+
+Settings → Cameras → **Zones** lets you outline the areas of a camera's picture that matter, for example your garden or driveway but not the pavement behind it. Only people standing inside a zone count (the point where their feet are, so someone walking behind a wall doesn't count just because their head shows above it). Click to place corners, click the first corner to finish, and drag corners to adjust; corners near the edge of the picture snap onto it. Zones show as thin outlines on the live picture. With no zones the whole picture counts.
+
 ### Arming schedule
 
 Settings → **Schedule** arms Guardian during the periods you set and disarms it outside them, for example every night 22:00–07:00, or on weekdays while you are at work. A period that ends earlier than it starts runs past midnight. Arming or disarming by hand lasts until the next scheduled change, and the schedule never switches off an alarm you raised. The header shows when it next arms or disarms.

@@ -117,6 +117,7 @@ class CameraUpdate(BaseModel):
     source: str | None = Field(None, min_length=1, max_length=500)
     enabled: bool | None = None
     audio: str | None = None
+    zones: list[list[list[float]]] | None = None
 
 
 def _camera_view(cfg) -> dict:
@@ -228,8 +229,10 @@ def test_intrusion(camera_id: str, req: TestRequest):
 
 
 @router.get("/cameras/{camera_id}/snapshot.jpg")
-def snapshot(camera_id: str):
-    jpeg = _unit(camera_id).snapshot()
+def snapshot(camera_id: str, raw: bool = False):
+    """raw: the picture without boxes and zones, e.g. for drawing zones on it."""
+    unit = _unit(camera_id)
+    jpeg = unit.raw_snapshot() if raw else unit.snapshot()
     if jpeg is None:
         raise HTTPException(503, "No picture from this camera yet")
     return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
