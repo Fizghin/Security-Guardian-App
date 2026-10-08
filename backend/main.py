@@ -44,6 +44,7 @@ def apply_settings(old: Settings | None, new: Settings) -> None:
         ai_service.warm_up()
     if old is not None and old.recording.retention_days != new.recording.retention_days:
         recording_library.prune(new.recording.retention_days)
+        event_service.prune_snapshots(new.recording.retention_days)
 
 
 class _EmbeddedServer(uvicorn.Server):
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
     init_db()
     cfg = settings_service.get()
     removed = recording_library.prune(cfg.recording.retention_days)
+    event_service.prune_snapshots(cfg.recording.retention_days)
     if removed:
         event_service.log("SYSTEM", f"Deleted {removed} recording(s) older than {cfg.recording.retention_days} days")
     camera_manager.start()

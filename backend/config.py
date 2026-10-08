@@ -23,6 +23,7 @@ DATA_DIR = Path(os.getenv("GUARDIAN_DATA_DIR", BACKEND_DIR / "storage")).resolve
 RECORDINGS_DIR = DATA_DIR / "recordings"
 FACES_DIR = DATA_DIR / "faces"
 MODELS_DIR = DATA_DIR / "models"
+SNAPSHOTS_DIR = DATA_DIR / "snapshots"  # pictures attached to events
 SETTINGS_FILE = DATA_DIR / "settings.json"
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(DATA_DIR / 'guardian.db').as_posix()}"
 
@@ -35,7 +36,7 @@ PORT = int(os.getenv("PORT", "8000"))
 # It only serves the phone camera page; the dashboard stays on HOST:PORT.
 PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
 
-for _d in (DATA_DIR, RECORDINGS_DIR, FACES_DIR, MODELS_DIR):
+for _d in (DATA_DIR, RECORDINGS_DIR, FACES_DIR, MODELS_DIR, SNAPSHOTS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 

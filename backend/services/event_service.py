@@ -4,8 +4,11 @@ import threading
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+from pathlib import Path
+
 from sqlalchemy import func
 
+from config import SNAPSHOTS_DIR
 from models.database import SecurityEvent, SessionLocal, to_iso, utcnow
 
 SEVERITIES = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
@@ -21,23 +24,28 @@ def _parse_time(value: str | None) -> datetime | None:
 
 
 class EventService:
-    def __init__(self):
+    def __init__(self, snapshot_dir: Path = SNAPSHOTS_DIR):
         self._lock = threading.Lock()
+        self.snapshot_dir = snapshot_dir
 
     def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
-            camera: str | None = None) -> None:
+            camera: str | None = None, snapshot: bytes | None = None) -> None:
+        """snapshot: a JPEG of the moment, shown with the event in the dashboard."""
         severity = severity.upper() if severity.upper() in SEVERITIES else "INFO"
         print(f"[event] {severity:<8} {event_type}{f' [{camera}]' if camera else ''}: {description}")
+        now = utcnow()
         with self._lock:
+            picture = self._save_snapshot(now, event_type, snapshot) if snapshot else None
             db = SessionLocal()
             try:
                 db.add(SecurityEvent(
-                    timestamp=utcnow(),
+                    timestamp=now,
                     event_type=event_type,
                     description=description,
                     severity=severity,
                     recording=recording,
                     camera=camera,
+                    snapshot=picture,
                 ))
                 db.commit()
             except Exception as exc:
@@ -45,6 +53,46 @@ class EventService:
                 print(f"[event] Failed to store event: {exc}")
             finally:
                 db.close()
+
+    def _save_snapshot(self, when: datetime, event_type: str, jpeg: bytes) -> str | None:
+        name = f"{when:%Y%m%d-%H%M%S-%f}_{event_type.lower()}.jpg"
+        try:
+            self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+            (self.snapshot_dir / name).write_bytes(jpeg)
+            return name
+        except OSError as exc:
+            print(f"[event] Could not save snapshot: {exc}")
+            return None
+
+    def snapshot_path(self, event_id: int) -> Path | None:
+        db = SessionLocal()
+        try:
+            row = db.get(SecurityEvent, event_id)
+            name = row.snapshot if row else None
+        finally:
+            db.close()
+        if not name or Path(name).name != name:
+            return None
+        path = self.snapshot_dir / name
+        return path if path.is_file() else None
+
+    def prune_snapshots(self, retention_days: int) -> int:
+        """Delete pictures older than the recording retention; their events stay."""
+        if retention_days <= 0:
+            return 0
+        cutoff = utcnow() - timedelta(days=retention_days)
+        db = SessionLocal()
+        try:
+            rows = db.query(SecurityEvent).filter(SecurityEvent.snapshot.isnot(None),
+                                                  SecurityEvent.timestamp < cutoff).all()
+            for row in rows:
+                if Path(row.snapshot).name == row.snapshot:
+                    (self.snapshot_dir / row.snapshot).unlink(missing_ok=True)
+                row.snapshot = None
+            db.commit()
+            return len(rows)
+        finally:
+            db.close()
 
     def _filtered(self, db, event_type=None, severity=None, since=None, until=None, search=None, camera=None):
         q = db.query(SecurityEvent)
@@ -149,9 +197,11 @@ class EventService:
         try:
             n = db.query(SecurityEvent).delete()
             db.commit()
-            return n
         finally:
             db.close()
+        for picture in self.snapshot_dir.glob("*.jpg"):
+            picture.unlink(missing_ok=True)
+        return n
 
 
 event_service = EventService()

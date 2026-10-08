@@ -92,8 +92,9 @@ class FakeEvents:
     def __init__(self):
         self.entries = []
 
-    def log(self, event_type, description, severity="INFO", recording=None, camera=None):
+    def log(self, event_type, description, severity="INFO", recording=None, camera=None, snapshot=None):
         self.entries.append((event_type, severity, camera))
+        self.pictures = getattr(self, "pictures", []) + [(event_type, snapshot)]
 
     def types(self):
         return [t for t, _, _ in self.entries]
@@ -275,3 +276,12 @@ def test_clip_is_sent_for_serious_incidents(brain):
 def test_voice_cooldown_range():
     assert voice_cooldown(0) == 40
     assert voice_cooldown(100) == pytest.approx(8)
+
+
+def test_key_events_keep_a_picture(brain):
+    brain.snapshot = lambda: b"jpeg"
+    brain.process([person()])
+    advance(brain, 5, [person()])
+    pictures = dict(brain.events.pictures)
+    assert pictures["DETECTION"] == b"jpeg" and pictures["ESCALATION"] == b"jpeg"
+    assert pictures.get("VOICE") is None and pictures.get("RECORDING") is None

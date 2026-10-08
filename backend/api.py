@@ -385,6 +385,14 @@ def export_events(type: str = "", severity: str = "", since: str = "", until: st
     return Response(csv_text, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@router.get("/events/{event_id}/snapshot.jpg")
+def event_snapshot(event_id: int):
+    path = event_service.snapshot_path(event_id)
+    if path is None:
+        raise HTTPException(404, "This event has no picture")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.delete("/events")
 def clear_events():
     return {"deleted": event_service.clear()}

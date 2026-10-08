@@ -26,6 +26,8 @@ from services.settings_service import settings_service
 
 LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
 SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
+# Events that keep a picture of the moment for the event log
+PICTURE_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT"}
 ALERT_REPEAT_SECONDS = 120
 INSIDER_LOG_SECONDS = 300
 PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
@@ -83,7 +85,9 @@ class CameraBrain:
         return self.incident_start is not None
 
     def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None) -> None:
-        self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name())
+        picture = self.snapshot() if event_type in PICTURE_EVENTS else None
+        self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
+                        snapshot=picture)
 
     # ---- inputs ---------------------------------------------------------
     def process(self, detections: List[Detection], now: float | None = None) -> None:

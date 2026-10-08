@@ -123,6 +123,8 @@ export interface SecurityEvent {
   severity: Severity
   recording: string | null
   camera: string | null
+  /** A picture of the moment is available from eventSnapshotUrl. */
+  snapshot: boolean
 }
 
 export interface EventPage {
@@ -365,6 +367,7 @@ export const api = {
   recordingUrl: (file: string, download = false) =>
     `/api/recordings/${encodeURIComponent(file)}${download ? '?download=true' : ''}`,
   thumbnailUrl: (file: string) => `/api/recordings/${encodeURIComponent(file)}/thumbnail`,
+  eventSnapshotUrl: (id: number) => `/api/events/${id}/snapshot.jpg`,
   deleteRecording: (file: string) => request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(file)}`, { method: 'DELETE' }),
 
   insiders: () => request<InsiderList>('/api/insiders'),

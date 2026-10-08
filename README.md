@@ -11,7 +11,7 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
-- **Dashboard**: live view, event log with filters, chart and CSV export, recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
+- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
 - Monitoring runs in the background whether or not the dashboard is open.
 
 ## Requirements
@@ -153,7 +153,7 @@ Settings → Notifications → **Send test** checks them.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `models/` and `settings.json` (changes made in the dashboard, which take priority over `.env`). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted together with old recordings), `models/` and `settings.json` (changes made in the dashboard, which take priority over `.env`). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

@@ -34,6 +34,7 @@ class SecurityEvent(Base):
     severity = Column(String, index=True)  # INFO, LOW, MEDIUM, HIGH, CRITICAL
     recording = Column(String, nullable=True)  # file name in storage/recordings
     camera = Column(String, nullable=True, index=True)  # camera name at the time of the event
+    snapshot = Column(String, nullable=True)  # picture of the moment, file name in storage/snapshots
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +45,7 @@ class SecurityEvent(Base):
             "severity": self.severity,
             "recording": self.recording,
             "camera": self.camera,
+            "snapshot": bool(self.snapshot),
         }
 
 
@@ -56,6 +58,8 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN recording VARCHAR"))
         if "camera" not in existing:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN camera VARCHAR"))
+        if "snapshot" not in existing:
+            conn.execute(text("ALTER TABLE security_events ADD COLUMN snapshot VARCHAR"))
 
 
 def get_db():

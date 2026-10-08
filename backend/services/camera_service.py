@@ -90,7 +90,7 @@ class CameraUnit:
         phone_send = (lambda cmd: hub.send(self.id, cmd)) if cfg.is_phone else None
         self.speaker = CameraSpeaker(cfg.id, lambda: self.cfg.audio, phone_send)
         self.brain = CameraBrain(cfg.id, self.name, self.speaker, self.recorder, settings=settings,
-                                 notifier=notifier, events=events, prune=recording_library.prune)
+                                 notifier=notifier, events=events, prune=lambda days: prune_media(days, events))
         self.brain.snapshot = self.snapshot
 
         self._thread: threading.Thread | None = None
@@ -100,6 +100,7 @@ class CameraUnit:
         self._raw = None
         self._jpeg: bytes | None = None
         self._jpeg_id = 0
+        self._judging: list | None = None  # [frame, detections, jpeg] while the brain judges that frame
         self._detections: list[Detection] = []
         self._detections_time = 0.0
         self.simulate_until = 0.0
@@ -165,7 +166,23 @@ class CameraUnit:
             return self._jpeg, self._jpeg_id
 
     def snapshot(self) -> bytes | None:
-        return self.latest_jpeg()[0]
+        """The picture that goes with an event or alert. While a frame is being judged it is that
+        frame with its boxes; the streamed picture is one frame older and has no boxes yet."""
+        judging = self._judging
+        if judging is None:
+            return self.latest_jpeg()[0]
+        if judging[2] is None:
+            frame, detections = judging[0], judging[1]
+            judging[2] = self._encode(draw_overlay(frame.copy(), detections, self.name(), self.settings.get().armed))
+        return judging[2]
+
+    @staticmethod
+    def _encode(annotated) -> bytes | None:
+        h, w = annotated.shape[:2]
+        if w > STREAM_MAX_WIDTH:
+            annotated = cv2.resize(annotated, (STREAM_MAX_WIDTH, int(h * STREAM_MAX_WIDTH / w)))
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        return buf.tobytes() if ok else None
 
     @property
     def connected(self) -> bool:
@@ -213,14 +230,11 @@ class CameraUnit:
 
                 shown = self._detections if now - self._detections_time < BOX_HOLD_SECONDS else []
                 annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed)
-                display = annotated
-                if w > STREAM_MAX_WIDTH:
-                    display = cv2.resize(annotated, (STREAM_MAX_WIDTH, int(h * STREAM_MAX_WIDTH / w)))
-                ok, buf = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                jpeg = self._encode(annotated)
                 with self._lock:
                     self._annotated, self._raw = annotated, frame
-                    if ok:
-                        self._jpeg = buf.tobytes()
+                    if jpeg:
+                        self._jpeg = jpeg
                         self._jpeg_id += 1
             except Exception as exc:
                 self.error = f"Processing error: {exc}"
@@ -245,7 +259,11 @@ class CameraUnit:
             evidence.append(FaceEvidence())
         self.tracker.update(detections, evidence, now, det.face_match_threshold, det.identify_seconds, recognition)
         self._detections, self._detections_time = detections, now
-        self.brain.process(detections, now)
+        self._judging = [frame, detections, None]
+        try:
+            self.brain.process(detections, now)
+        finally:
+            self._judging = None
         self.error = self.detector.error
 
     def _check_health(self, now: float) -> None:
@@ -286,6 +304,11 @@ class CameraUnit:
             **self.brain.status(),
             "recording": self.recorder.status(),
         }
+
+
+def prune_media(retention_days: int, events=event_service) -> int:
+    """Recordings and event pictures share one retention period."""
+    return recording_library.prune(retention_days) + events.prune_snapshots(retention_days)
 
 
 class CameraManager:
@@ -362,14 +385,15 @@ class CameraManager:
         with self._lock:
             units = list(self.units.values())
             self.panic_active = True
-        self.events.log("PANIC", "Alarm raised from the dashboard", "CRITICAL")
+        first = self.first_online()
+        picture = first.snapshot() if first else None
+        self.events.log("PANIC", "Alarm raised from the dashboard", "CRITICAL", snapshot=picture)
         for unit in units:
             unit.brain.enter_panic()
         cameras = ", ".join(u.name() for u in units) or "no cameras"
-        first = self.first_online()
         msg = f"Panic button pressed. Recording on {cameras}; the siren is sounding."
-        if self.notifier.send_alert("Alarm raised", msg, "CRITICAL", first.snapshot() if first else None):
-            self.events.log("ALERT", f"Owner alerted: {msg}", "CRITICAL")
+        if self.notifier.send_alert("Alarm raised", msg, "CRITICAL", picture):
+            self.events.log("ALERT", f"Owner alerted: {msg}", "CRITICAL", snapshot=picture)
         if not units:
             return
         ctx = units[0].brain.context(4, manual=True)
