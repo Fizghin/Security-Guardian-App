@@ -119,6 +119,10 @@ Only time the person is actually on camera counts. The incident ends 10 s after 
 
 Timings, which levels record, alert and sound the siren, and the voice's personality are all set in Settings.
 
+### Arming schedule
+
+Settings → **Schedule** arms Guardian during the periods you set and disarms it outside them, for example every night 22:00–07:00, or on weekdays while you are at work. A period that ends earlier than it starts runs past midnight. Arming or disarming by hand lasts until the next scheduled change, and the schedule never switches off an alarm you raised. The header shows when it next arms or disarms.
+
 ## Insiders
 
 On the Insiders page, either upload clear photos or use **Add from a camera**: stand in front of a camera, take a snapshot and pick your face. Photos from the camera that will see you work best. Photos with no clear face, several similar-sized faces, a strongly turned head or heavy blur are rejected with the reason, and a warning appears if the face looks like another insider. **Check a photo** shows who Guardian thinks is in any picture and how close the match is.

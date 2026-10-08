@@ -36,12 +36,19 @@ const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 const shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
 const hourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
+const weekdayTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
 
 export const formatTime = (iso: string) => timeFmt.format(new Date(iso))
 export const formatDateTime = (iso: string) => dateTimeFmt.format(new Date(iso))
 export const formatDay = (iso: string) => dayFmt.format(new Date(iso))
 export const formatShortDate = (iso: string) => shortDateFmt.format(new Date(iso))
 export const formatHour = (iso: string) => hourFmt.format(new Date(iso))
+
+/** "07:00" when it is less than a day away, otherwise "Mon 22:00". */
+export function formatUpcoming(iso: string, now = Date.now()): string {
+  const at = new Date(iso)
+  return at.getTime() - now < 20 * 3600 * 1000 ? hourFmt.format(at) : weekdayTimeFmt.format(at)
+}
 
 export function isToday(iso: string): boolean {
   const d = new Date(iso)

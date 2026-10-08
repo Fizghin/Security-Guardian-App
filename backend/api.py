@@ -63,6 +63,7 @@ def status():
         "ai": ai_service.status(),
         "faces": face_service.status(),
         "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT},
+        "schedule": camera_manager.schedule_status(),
         "server_time": time.time(),
     }
 
@@ -524,6 +525,8 @@ def patch_settings(patch: dict):
         settings_service.update(patch)
     except SettingsError as exc:
         raise HTTPException(422, str(exc))
+    if "schedule" in patch:
+        camera_manager.check_schedule()  # apply an edited schedule now rather than at the next check
     return settings_service.public()
 
 

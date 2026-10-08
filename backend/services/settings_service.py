@@ -108,6 +108,34 @@ class PhoneSettings(BaseModel):
     quality: float = Field(0.7, ge=0.3, le=0.95)
 
 
+HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+
+class ScheduleRule(BaseModel):
+    days: list[int] = Field(default_factory=lambda: list(range(7)))  # 0 = Monday
+    start: str = Field("22:00", pattern=HHMM)
+    end: str = Field("07:00", pattern=HHMM)  # earlier than start: runs past midnight
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, days: list[int]):
+        days = sorted(set(days))
+        if not days or days[0] < 0 or days[-1] > 6:
+            raise ValueError("Pick at least one day")
+        return days
+
+    @model_validator(mode="after")
+    def _span(self):
+        if self.start == self.end:
+            raise ValueError("A period needs different start and end times")
+        return self
+
+
+class ScheduleSettings(BaseModel):
+    enabled: bool = False
+    rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
+
+
 class Settings(BaseModel):
     armed: bool = True
     cameras: list[CameraConfig] = [CameraConfig(id="cam1", name="Camera 1")]
@@ -116,6 +144,7 @@ class Settings(BaseModel):
     recording: RecordingSettings = RecordingSettings()
     ai: AISettings = AISettings()
     phone: PhoneSettings = PhoneSettings()
+    schedule: ScheduleSettings = ScheduleSettings()
 
     @field_validator("cameras")
     @classmethod

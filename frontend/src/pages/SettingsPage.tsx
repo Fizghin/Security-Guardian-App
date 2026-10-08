@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { RefreshCw, Send, Sparkles } from 'lucide-react'
-import { api, type AITestResult, type Settings, type SettingsPatch } from '../api'
+import { Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
+import { api, type AITestResult, type ScheduleRule, type ScheduleStatus, type Settings, type SettingsPatch } from '../api'
 import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
-import { formatBytes, formatUptime } from '../lib/format'
+import { formatBytes, formatUpcoming, formatUptime } from '../lib/format'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -317,6 +317,91 @@ function VoiceSection({ value, save, voice }: { value: Settings['ai']; save: Sav
   )
 }
 
+// ---- Schedule ---------------------------------------------------------------------------
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6]
+const SCHEDULE_PRESETS: [string, ScheduleRule][] = [
+  ['Every night 22:00–07:00', { days: EVERY_DAY, start: '22:00', end: '07:00' }],
+  ['Weekdays 08:00–18:00', { days: [0, 1, 2, 3, 4], start: '08:00', end: '18:00' }],
+]
+
+function scheduleProblem(rules: ScheduleRule[]): string | null {
+  for (const rule of rules) {
+    if (!rule.days.length) return 'Each period needs at least one day.'
+    if (!rule.start || !rule.end) return 'Each period needs a start and an end time.'
+    if (rule.start === rule.end) return 'A period needs different start and end times.'
+  }
+  return null
+}
+
+function ScheduleSection({ value, save, status }: { value: Settings['schedule']; save: Save; status?: ScheduleStatus }) {
+  const d = useDraft(value)
+  const rules = d.draft.rules
+  const problem = scheduleProblem(rules)
+  const setRule = (i: number, patch: Partial<ScheduleRule>) => d.set('rules', rules.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const toggleDay = (i: number, day: number) => {
+    const days = rules[i].days.includes(day) ? rules[i].days.filter((x) => x !== day) : [...rules[i].days, day].sort()
+    setRule(i, { days })
+  }
+  const now =
+    status?.enabled && status.next_change && !d.dirty
+      ? `${status.active ? 'Armed' : 'Disarmed'} by the schedule now; ${status.active ? 'disarms' : 'arms'} ${formatUpcoming(status.next_change)}.`
+      : null
+  return (
+    <Section
+      id="schedule"
+      title="Schedule"
+      description="Guardian arms itself during these periods and disarms outside them. Arming or disarming by hand lasts until the next change."
+      dirty={d.dirty && !problem}
+      onReset={d.reset}
+      onSave={() => save({ schedule: d.changes })}
+    >
+      <Toggle checked={d.draft.enabled} onChange={(v) => d.set('enabled', v)} label="Arm and disarm on a schedule" description={now ?? 'Times are this computer’s local time.'} />
+      {rules.length === 0 ? (
+        <p className="text-sm text-zinc-500">No periods yet. Add one below.</p>
+      ) : (
+        <ul className="space-y-2">
+          {rules.map((rule, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-zinc-800 p-3">
+              <div className="flex gap-1" role="group" aria-label="Days">
+                {DAYS.map((name, day) => (
+                  <button
+                    key={name}
+                    type="button"
+                    aria-pressed={rule.days.includes(day)}
+                    onClick={() => toggleDay(i, day)}
+                    className={cx('h-8 w-10 rounded text-xs font-medium', rule.days.includes(day) ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200')}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 text-sm text-zinc-400">
+                <input type="time" aria-label="Start" className="input w-32 sm:w-36" value={rule.start} onChange={(e) => setRule(i, { start: e.target.value })} />
+                to
+                <input type="time" aria-label="End" className="input w-32 sm:w-36" value={rule.end} onChange={(e) => setRule(i, { end: e.target.value })} />
+                {rule.start && rule.end && rule.end < rule.start && <span className="text-xs text-zinc-500">next day</span>}
+              </div>
+              <Button size="sm" variant="ghost" className="ml-auto" icon={<Trash2 className="h-4 w-4" />} aria-label="Remove period" onClick={() => d.set('rules', rules.filter((_, j) => j !== i))} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {problem && <p className="text-sm text-amber-400">{problem}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" icon={<Plus className="h-4 w-4" />} disabled={rules.length >= 14} onClick={() => d.set('rules', [...rules, { days: EVERY_DAY, start: '22:00', end: '07:00' }])}>
+          Add period
+        </Button>
+        {SCHEDULE_PRESETS.map(([label, rule]) => (
+          <Button key={label} size="sm" variant="ghost" disabled={rules.length >= 14} onClick={() => d.set('rules', [...rules, rule])}>
+            {label}
+          </Button>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
 // ---- Detection --------------------------------------------------------------------------
 function DetectionSection({ value, save }: { value: Settings['detection']; save: Save }) {
   const d = useDraft(value)
@@ -513,6 +598,7 @@ function SystemSection() {
 // ---- Page ------------------------------------------------------------------------------------
 const SECTIONS = [
   ['cameras', 'Cameras'],
+  ['schedule', 'Schedule'],
   ['ai', 'Language model'],
   ['voice', 'Voice'],
   ['detection', 'Detection'],
@@ -569,6 +655,7 @@ export default function SettingsPage({ section }: { section: string }) {
       </nav>
       <div className="min-w-0 space-y-4">
         <CamerasSection key={k(settings.phone)} phoneSettings={settings.phone} savePhone={(phone) => save({ phone })} />
+        <ScheduleSection key={k(settings.schedule)} value={settings.schedule} save={save} status={status?.schedule} />
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />

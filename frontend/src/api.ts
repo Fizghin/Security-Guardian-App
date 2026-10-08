@@ -61,7 +61,22 @@ export interface Status {
   ai: AIStatus
   faces: FaceStatus
   phone: { enabled: boolean; port: number }
+  schedule: ScheduleStatus
   server_time: number
+}
+
+export interface ScheduleStatus {
+  enabled: boolean
+  /** Whether the schedule wants Guardian armed right now (null when it is off). */
+  active: boolean | null
+  next_change: string | null
+}
+
+export interface ScheduleRule {
+  /** 0 = Monday … 6 = Sunday */
+  days: number[]
+  start: string
+  end: string
 }
 
 export interface AIStatus {
@@ -231,6 +246,7 @@ export interface Settings {
     greet_cooldown_minutes: number
   }
   phone: { fps: number; max_width: number; quality: number }
+  schedule: { enabled: boolean; rules: ScheduleRule[] }
 }
 
 type Section = Exclude<keyof Settings, 'armed' | 'cameras'>

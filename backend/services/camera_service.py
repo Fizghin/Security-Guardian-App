@@ -27,6 +27,7 @@ from services.face_service import face_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
+from services.schedule_service import armed_at, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
 from services.sources import CaptureSource, parse_source
@@ -296,12 +297,14 @@ class CameraManager:
         self.panic_active = False
         self._idle_thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._schedule_lock = threading.Lock()
+        self._schedule_seen: tuple[str, bool] | None = None  # (schedule, its answer) last acted on
 
     # ---- lifecycle ---------------------------------------------------------------
     def start(self) -> None:
         self.apply(None, self.settings.get())
         self._stop.clear()
-        self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name="voice-prep")
+        self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name="background")
         self._idle_thread.start()
 
     def stop(self) -> None:
@@ -344,12 +347,13 @@ class CameraManager:
         return next((u for u in self.units.values() if u.connected), None)
 
     # ---- system-wide actions ------------------------------------------------------
-    def set_armed(self, armed: bool) -> None:
+    def set_armed(self, armed: bool, by: str = "") -> None:
         if armed == self.settings.get().armed:
             return
         self.settings.update({"armed": armed})
+        how = f" {by}" if by else ""
         self.events.log("ARMED" if armed else "DISARMED",
-                        "System armed" if armed else "System disarmed: detections will not raise alarms", "INFO")
+                        f"System armed{how}" if armed else f"System disarmed{how}: detections will not raise alarms", "INFO")
         if not armed:
             for unit in list(self.units.values()):
                 unit.brain.disarm()
@@ -420,13 +424,45 @@ class CameraManager:
         out.append(WarningContext(level=4, manual=True, recording=True, alerted=can_alert, siren=siren_ok))
         return out
 
+    # ---- schedule -------------------------------------------------------------------
+    def check_schedule(self, now: datetime | None = None) -> None:
+        """Arm or disarm when the schedule's answer changes, or when the schedule was edited.
+        Arming or disarming by hand in between therefore lasts until the next change."""
+        with self._schedule_lock:
+            schedule = self.settings.get().schedule
+            if not schedule.enabled or not schedule.rules:
+                self._schedule_seen = None
+                return
+            seen = (schedule.model_dump_json(), armed_at(schedule.rules, now or datetime.now()))
+            if seen == self._schedule_seen:
+                return
+            self._schedule_seen = seen
+            if seen[1]:
+                self.set_armed(True, by="by schedule")
+            elif not self.panic_active:  # a raised alarm stays until it is reset
+                self.set_armed(False, by="by schedule")
+
+    def schedule_status(self, now: datetime | None = None) -> dict:
+        schedule = self.settings.get().schedule
+        if not schedule.enabled or not schedule.rules:
+            return {"enabled": schedule.enabled, "active": None, "next_change": None}
+        now = now or datetime.now()
+        change = next_change(schedule.rules, now)
+        return {"enabled": True, "active": armed_at(schedule.rules, now),
+                "next_change": change.astimezone().isoformat() if change else None}
+
     def _idle_loop(self) -> None:
-        while not self._stop.wait(10):
-            if self.settings.get().armed:
-                self.ai.keep_warm()
-            busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))
-            if not busy:
-                self.ai.prefetch(self.warning_contexts())
+        while not self._stop.is_set():
+            try:
+                self.check_schedule()
+                if self.settings.get().armed:
+                    self.ai.keep_warm()
+                busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))
+                if not busy:
+                    self.ai.prefetch(self.warning_contexts())
+            except Exception as exc:  # keep the schedule and voice preparation running
+                print(f"[manager] Background task failed: {exc}")
+            self._stop.wait(10)
 
     # ---- reporting ----------------------------------------------------------------
     def status(self) -> dict:

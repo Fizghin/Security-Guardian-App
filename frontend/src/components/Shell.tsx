@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { BellOff, Film, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, Users, Video, X } from 'lucide-react'
 import { api } from '../api'
 import { cx } from '../lib/cx'
-import { formatBytes, formatDuration, LEVELS } from '../lib/format'
+import { formatBytes, formatDuration, formatUpcoming, LEVELS } from '../lib/format'
 import { href, PAGE_TITLES, type Page } from '../lib/route'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
@@ -137,6 +137,11 @@ function TopBar({ page, onMenu }: { page: Page; onMenu: () => void }) {
               <Dot className={lv.bg} />
               {level === 0 ? 'Clear' : <><span className="hidden sm:inline">Level {level} · </span>{lv.label}</>}
             </span>
+            {status.schedule?.enabled && status.schedule.next_change && (
+              <a href={href('settings', 'schedule')} className="hidden text-xs text-zinc-500 hover:text-zinc-300 md:inline" title="Change the schedule">
+                Schedule: {status.schedule.active ? 'disarms' : 'arms'} {formatUpcoming(status.schedule.next_change)}
+              </a>
+            )}
             <Button
               size="sm"
               variant="secondary"
