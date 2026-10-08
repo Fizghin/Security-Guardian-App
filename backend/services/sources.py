@@ -25,6 +25,10 @@ SYSTEM = platform.system()
 PHONE_TIMEOUT = 4.0  # seconds without a frame before a phone counts as offline
 
 
+class CameraBlocked(RuntimeError):
+    """The operating system doesn't allow camera access (yet)."""
+
+
 def _local_backends():
     if SYSTEM == "Windows":
         return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
@@ -151,7 +155,7 @@ class CaptureSource:
     def _open(self):
         kind, value = parse_source(self.source)
         if kind in ("auto", "index") and (blocked := local_camera_blocked()):
-            raise RuntimeError(blocked)
+            raise CameraBlocked(blocked)
         if kind == "auto":
             for index in range(6):
                 if self._stop.is_set():
@@ -187,7 +191,10 @@ class CaptureSource:
                 self.connected = False
                 if self._stop.wait(backoff):
                     break
-                backoff = min(backoff * 2, 15.0)
+                # Checking the permission is free, so pick up a "yes" quickly. Searching for a webcam
+                # that isn't there makes macOS print warnings, so do that rarely.
+                limit = 2.0 if isinstance(exc, CameraBlocked) else 60.0 if self.kind == "auto" else 15.0
+                backoff = min(backoff * 2, limit)
                 continue
             if cap is None:
                 break

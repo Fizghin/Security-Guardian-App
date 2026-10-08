@@ -6,7 +6,8 @@ terminal is covered by the terminal app's permission (Terminal, iTerm, VS Code, 
 OpenCV can only ask from the main thread, while Guardian opens cameras in background
 threads, where every attempt fails and prints the same warnings again. So:
 
-  * run_server.py asks once on the main thread at startup (request_camera_access), and
+  * run_server.py asks on the main thread at startup if macOS never got an answer
+    (request_camera_access); it does not wait, since cameras retry and pick up the answer, and
   * background threads check the answer first (local_camera_blocked) instead of trying.
 
 The status is read straight from AVFoundation through the Objective-C runtime, so no extra
@@ -15,7 +16,6 @@ package is needed. On other systems, or if it can't be read, everything behaves 
 import ctypes
 import ctypes.util
 import platform
-import time
 
 NOT_DETERMINED, RESTRICTED, DENIED, AUTHORIZED = 0, 1, 2, 3  # AVAuthorizationStatus
 
@@ -64,20 +64,14 @@ def local_camera_blocked() -> str | None:
         return ("macOS is blocking the camera. In System Settings → Privacy & Security → Camera, turn on the app "
                 "Guardian runs in (Terminal, iTerm, …), then restart Guardian.")
     if status == NOT_DETERMINED:
-        return "macOS has not allowed camera access yet. Restart Guardian and click OK when macOS asks."
+        return ("Click OK when macOS asks whether your terminal may use the camera. "
+                "If no question appeared, restart Guardian.")
     return None
 
 
-def request_camera_access(timeout: float = 30.0) -> int | None:
-    """On macOS, ask for camera access from the main thread and wait for the answer."""
-    status = camera_permission()
-    if status != NOT_DETERMINED:
-        return status
-    import cv2
+def request_camera_access() -> None:
+    """On macOS, ask for camera access if it was never answered. Only the main thread can ask."""
+    if camera_permission() == NOT_DETERMINED:
+        import cv2
 
-    print("Camera: macOS will ask whether this terminal may use the camera. Click OK.")
-    cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION).release()  # on the main thread OpenCV can ask macOS
-    deadline = time.time() + timeout
-    while camera_permission() == NOT_DETERMINED and time.time() < deadline:
-        time.sleep(0.5)
-    return camera_permission()
+        cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION).release()  # OpenCV asks macOS and returns at once

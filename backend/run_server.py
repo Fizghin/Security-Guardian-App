@@ -32,46 +32,68 @@ from services.ai_service import AIError, ai_service  # noqa: E402
 from services.settings_service import settings_service  # noqa: E402
 
 
+def _local(host: str) -> str:
+    """Where to reach a server listening on host, as a URL host."""
+    target = {"0.0.0.0": "127.0.0.1", "": "127.0.0.1", "::": "::1"}.get(host, host)
+    return f"[{target}]" if ":" in target else target
+
+
 def port_in_use(host: str, port: int) -> bool:
-    """True if something already accepts connections on this port."""
-    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex((target, port)) == 0
+    """True if something already answers on this port, or the server could not bind it."""
+    try:
+        with socket.create_connection((_local(host).strip("[]"), port), timeout=0.5):
+            return True
+    except OSError:
+        pass
+    # Something can hold the port without answering, e.g. bound to one address while HOST is 0.0.0.0
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET  # what uvicorn uses
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            if os.name != "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # like the server itself
+            s.bind((host, port))
+        return False
+    except OSError:
+        return True
 
 
 def guardian_running(host: str, port: int) -> bool:
-    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    base = f"http://{_local(host)}:{port}"
     try:
-        return httpx.get(f"http://{target}:{port}/api/health", timeout=2, trust_env=False).json().get("app") == "guardian"
-    except (httpx.HTTPError, ValueError, AttributeError):
+        if httpx.get(f"{base}/api/health", timeout=2, trust_env=False).json().get("app") == "guardian":
+            return True
+        # Versions without the app field in the health check
+        return httpx.get(f"{base}/openapi.json", timeout=2, trust_env=False).json()["info"]["title"] == "Guardian"
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
 
 def choose_port(host: str, port: int) -> tuple[int, bool]:
     """Returns (port, already_running): the configured port, or the next free one if another
-    program has it. already_running means Guardian itself was found there."""
-    for candidate in range(port, port + 50):
-        if not port_in_use(host, candidate):
-            if candidate != port:
-                print(f"Port {port} is used by another program, so Guardian uses {candidate}. "
-                      "Set PORT= in backend/.env to choose a different one.")
-            return candidate, False
+    program has it. already_running means Guardian itself was found there, possibly on a port
+    it moved to earlier."""
+    ports = range(port, port + 50)
+    busy = [p for p in ports if port_in_use(host, p)]
+    for candidate in busy:
         if guardian_running(host, candidate):
             return candidate, True
-    sys.exit(f"Ports {port}-{port + 49} are all in use. Set PORT= in backend/.env to a free port.")
+    free = next((p for p in ports if p not in busy), None)
+    if free is None:
+        sys.exit(f"Ports {port}-{port + 49} are all in use. Set PORT= in backend/.env to a free port.")
+    if free != port:
+        print(f"Port {port} is used by another program, so Guardian uses {free}. "
+              "Set PORT= in backend/.env to choose a different one.")
+    return free, False
 
 
 def ensure_camera_access() -> None:
-    """macOS only lets OpenCV ask for camera access from the main thread, so ask here once."""
+    """macOS only lets OpenCV ask for camera access from the main thread, so ask here."""
     if platform.system() != "Darwin":
         return
-    from services.camera_access import AUTHORIZED, local_camera_blocked, request_camera_access
-    from services.sources import parse_source
-    if not any(c.enabled and parse_source(c.source)[0] in ("auto", "index") for c in settings_service.get().cameras):
-        return
-    if request_camera_access() not in (None, AUTHORIZED):
-        print(f"Camera: {local_camera_blocked()} Phone cameras work either way.")
+    from services.camera_access import local_camera_blocked, request_camera_access
+    request_camera_access()
+    if blocked := local_camera_blocked():
+        print(f"Camera: {blocked} Phone cameras work either way.")
 
 
 def find_ollama() -> str | None:

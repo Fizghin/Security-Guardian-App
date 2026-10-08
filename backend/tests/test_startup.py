@@ -96,3 +96,39 @@ def test_scan_explains_a_blocked_camera(monkeypatch):
     with api_client() as client:
         r = client.get("/api/cameras/scan")
     assert r.status_code == 409 and "blocking" in r.json()["detail"]
+
+
+def test_guardian_on_a_fallback_port_is_found_after_the_original_frees_up(run_server, monkeypatch):
+    # Guardian moved to 8001 while 8000 was busy; 8000 is free again now. A second start must not use it.
+    monkeypatch.setattr(run_server, "port_in_use", lambda host, port: port == 8001)
+    monkeypatch.setattr(run_server, "guardian_running", lambda host, port: port == 8001)
+    assert run_server.choose_port("127.0.0.1", 8000) == (8001, True)
+
+
+def test_port_held_on_another_address_counts_as_busy(run_server):
+    # Nothing answers on 127.0.0.1, but binding 0.0.0.0 would still fail.
+    with socket.socket() as s:
+        s.bind(("127.0.0.2", 0))
+        s.listen()
+        port = s.getsockname()[1]
+        assert run_server.port_in_use("0.0.0.0", port)
+
+
+def test_ipv6_host_does_not_crash(run_server):
+    assert isinstance(run_server.port_in_use("::1", 1), bool)
+    assert run_server._local("::") == "[::1]" and run_server._local("0.0.0.0") == "127.0.0.1"
+
+
+def test_older_guardian_is_recognised_by_its_api_title(run_server, monkeypatch):
+    class Reply:
+        def __init__(self, data):
+            self.data = data
+
+        def json(self):
+            return self.data
+
+    replies = {"/api/health": {"ok": True, "time": 1.0}, "/openapi.json": {"info": {"title": "Guardian"}}}
+    monkeypatch.setattr(run_server.httpx, "get", lambda url, **kw: Reply(replies[url[url.index("/", 8):]]))
+    assert run_server.guardian_running("127.0.0.1", 8000)
+    replies["/openapi.json"] = {"info": {"title": "CityEye"}}
+    assert not run_server.guardian_running("127.0.0.1", 8000)
