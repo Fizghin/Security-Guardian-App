@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from config import BACKEND_DIR, PHONE_PORT, PHONES_ENABLED, PUBLIC_URL
 from services.ai_service import AIError, WarningContext, ai_service
+from services.camera_access import local_camera_blocked
 from services.camera_service import camera_manager
 from services.detection_service import detection_service
 from services.event_service import event_service
@@ -49,7 +50,7 @@ def _jpeg_data_url(frame, quality=80) -> str:
 # ---- live state --------------------------------------------------------------
 @router.get("/health")
 def health():
-    return {"ok": True, "time": time.time()}
+    return {"ok": True, "app": "guardian", "time": time.time()}
 
 
 @router.get("/status")
@@ -199,6 +200,8 @@ async def test_source(req: SourceTest):
 
 @router.get("/cameras/scan")
 async def scan_cameras():
+    if blocked := local_camera_blocked():
+        raise HTTPException(409, blocked)
     in_use = {u.source.active_index for u in camera_manager.units.values()
               if getattr(u.source, "active_index", None) is not None}
     found = await run_in_threadpool(scan_local_cameras, 6, in_use)

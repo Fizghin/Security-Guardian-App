@@ -16,6 +16,8 @@ ROOT_DIR = BACKEND_DIR.parent
 # backend/.env wins over a repo-level .env; real environment variables win over both.
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env")
+# OpenCV prints internal warnings (camera probing, model backends) that mean nothing to users
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 DATA_DIR = Path(os.getenv("GUARDIAN_DATA_DIR", BACKEND_DIR / "storage")).resolve()
 RECORDINGS_DIR = DATA_DIR / "recordings"

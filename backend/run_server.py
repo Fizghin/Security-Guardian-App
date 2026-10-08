@@ -2,7 +2,8 @@
 Start Guardian:  python backend/run_server.py   (from any directory)
 
 HOST / PORT come from backend/.env (defaults 127.0.0.1:8000). Set HOST=0.0.0.0
-to open the dashboard from other devices on your network.
+to open the dashboard from other devices on your network. If another program
+already uses PORT, the next free port is used instead.
 
 If the language model is a local Ollama server that is not running yet, it is
 started here so warnings come from the model rather than pre-written lines.
@@ -10,6 +11,7 @@ started here so warnings come from the model rather than pre-written lines.
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -28,6 +30,48 @@ import uvicorn  # noqa: E402
 from config import FRONTEND_DIST, HOST, PHONE_PORT, PORT  # noqa: E402
 from services.ai_service import AIError, ai_service  # noqa: E402
 from services.settings_service import settings_service  # noqa: E402
+
+
+def port_in_use(host: str, port: int) -> bool:
+    """True if something already accepts connections on this port."""
+    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((target, port)) == 0
+
+
+def guardian_running(host: str, port: int) -> bool:
+    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    try:
+        return httpx.get(f"http://{target}:{port}/api/health", timeout=2, trust_env=False).json().get("app") == "guardian"
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return False
+
+
+def choose_port(host: str, port: int) -> tuple[int, bool]:
+    """Returns (port, already_running): the configured port, or the next free one if another
+    program has it. already_running means Guardian itself was found there."""
+    for candidate in range(port, port + 50):
+        if not port_in_use(host, candidate):
+            if candidate != port:
+                print(f"Port {port} is used by another program, so Guardian uses {candidate}. "
+                      "Set PORT= in backend/.env to choose a different one.")
+            return candidate, False
+        if guardian_running(host, candidate):
+            return candidate, True
+    sys.exit(f"Ports {port}-{port + 49} are all in use. Set PORT= in backend/.env to a free port.")
+
+
+def ensure_camera_access() -> None:
+    """macOS only lets OpenCV ask for camera access from the main thread, so ask here once."""
+    if platform.system() != "Darwin":
+        return
+    from services.camera_access import AUTHORIZED, local_camera_blocked, request_camera_access
+    from services.sources import parse_source
+    if not any(c.enabled and parse_source(c.source)[0] in ("auto", "index") for c in settings_service.get().cameras):
+        return
+    if request_camera_access() not in (None, AUTHORIZED):
+        print(f"Camera: {local_camera_blocked()} Phone cameras work either way.")
 
 
 def find_ollama() -> str | None:
@@ -96,10 +140,17 @@ def ensure_local_model() -> None:
 
 
 if __name__ == "__main__":
-    url = f"http://{'localhost' if HOST in ('0.0.0.0', '127.0.0.1') else HOST}:{PORT}"
+    port, already_running = choose_port(HOST, PORT)
+    url = f"http://{'localhost' if HOST in ('0.0.0.0', '127.0.0.1') else HOST}:{port}"
+    if already_running:
+        print(f"Guardian is already running: {url}")
+        if "--no-browser" not in sys.argv:
+            webbrowser.open(url)
+        sys.exit(0)
     if not (FRONTEND_DIST / "index.html").exists():
         print("Dashboard not built yet: run `npm install && npm run build` in frontend/ (install scripts do this).")
     ensure_local_model()
+    ensure_camera_access()
     print(f"\nGuardian dashboard: {url}   (Ctrl+C to stop)")
     if PHONE_PORT > 0:
         from services.phone_service import lan_addresses
@@ -109,4 +160,4 @@ if __name__ == "__main__":
     print()
     if "--no-browser" not in sys.argv:
         Timer(3.0, lambda: webbrowser.open(url)).start()
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=False, log_level="warning")
+    uvicorn.run("main:app", host=HOST, port=port, reload=False, log_level="warning")

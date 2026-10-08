@@ -176,7 +176,8 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 - **Warnings say "pre-written line, model unavailable"**: Ollama isn't running or has no model. Check Settings → Language model; the error explains what is missing.
 - **No sound**: Settings → Voice shows the speech engine. On Linux install `espeak-ng`; the siren needs `paplay`, `aplay` or `ffplay`.
 - **Clip won't play in the browser**: some Chromium builds lack H.264. Use Download, or Chrome/Edge/Firefox/Safari.
-- **Port in use**: set `PORT=` in `backend/.env`.
+- **Port 8000 is used by another program**: Guardian moves to the next free port and prints the address; set `PORT=` in `backend/.env` to choose one. Starting Guardian while it already runs just prints its address.
+- **macOS: "not authorized to capture video" or no webcam picture**: the first time Guardian starts with a webcam, macOS asks whether your terminal app may use the camera. Click OK. If you declined, turn the terminal app (Terminal, iTerm, …) on in System Settings → Privacy & Security → Camera and restart Guardian. Phone cameras work either way.
 
 ## Security
 

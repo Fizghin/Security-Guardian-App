@@ -19,6 +19,8 @@ import time
 
 import cv2
 
+from services.camera_access import local_camera_blocked
+
 SYSTEM = platform.system()
 PHONE_TIMEOUT = 4.0  # seconds without a frame before a phone counts as offline
 
@@ -48,6 +50,8 @@ def parse_source(source: str):
 
 
 def open_local_camera(index: int):
+    if local_camera_blocked():
+        return None
     for backend in _local_backends():
         try:
             cap = cv2.VideoCapture(index, backend)
@@ -83,6 +87,8 @@ def grab_test_frame(source: str, timeout: float = 10.0):
         return None, "Only camera numbers, stream URLs and files can be tested"
     if kind == "file" and not os.path.isfile(value):
         return None, f"File not found: {value}"
+    if kind == "index" and (blocked := local_camera_blocked()):
+        return None, blocked
     result: dict = {}
 
     def run():
@@ -144,6 +150,8 @@ class CaptureSource:
 
     def _open(self):
         kind, value = parse_source(self.source)
+        if kind in ("auto", "index") and (blocked := local_camera_blocked()):
+            raise RuntimeError(blocked)
         if kind == "auto":
             for index in range(6):
                 if self._stop.is_set():
