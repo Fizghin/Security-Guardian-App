@@ -1,66 +1,64 @@
 @echo off
 setlocal
+cd /d "%~dp0"
 
-echo ===================================================
-echo AI Security Guardian - Installation Script
-echo ===================================================
+echo ==================================================
+echo  Guardian - installation
+echo ==================================================
 
-REM Check Python
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not in PATH.
-    echo Please install Python 3.10+ and try again.
-    pause
-    exit /b 1
+if errorlevel 1 (
+    echo [ERROR] Python is not installed or not on PATH.
+    echo         Install Python 3.10 - 3.13 from python.org and tick "Add python.exe to PATH".
+    pause & exit /b 1
 )
 
-REM Create Virtual Environment
-if not exist "venv" (
-    echo [INFO] Creating Python virtual environment...
-    python -m venv venv
+if not exist venv (
+    echo [1/4] Creating Python environment...
+    python -m venv venv || (echo [ERROR] Could not create venv & pause & exit /b 1)
+)
+call venv\Scripts\activate.bat
+
+echo [2/4] Installing Python packages (first run downloads ~1 GB, mostly PyTorch)...
+python -m pip install --upgrade pip >nul
+pip install -r backend\requirements.txt || (echo [ERROR] pip install failed & pause & exit /b 1)
+
+if not exist backend\.env (
+    copy backend\.env.template backend\.env >nul
+    echo        Created backend\.env from the template.
+)
+
+echo [3/4] Building the dashboard...
+call npm --version >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js is not installed. Install the LTS version from nodejs.org and run this again.
+    pause & exit /b 1
+)
+pushd frontend
+call npm ci || (popd & echo [ERROR] npm install failed & pause & exit /b 1)
+call npm run build || (popd & echo [ERROR] dashboard build failed & pause & exit /b 1)
+popd
+
+echo [4/4] Local language model...
+set "OLLAMA=ollama"
+where ollama >nul 2>&1 || set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
+"%OLLAMA%" --version >nul 2>&1
+if errorlevel 1 (
+    echo        Ollama is not installed. Install it from https://ollama.com and run:
+    echo            ollama pull llama3.2:3b
+    echo        Guardian works without it, but speaks pre-written warnings instead.
 ) else (
-    echo [INFO] Virtual environment already exists.
+    "%OLLAMA%" list | findstr /r /c:":" >nul 2>&1
+    if errorlevel 1 (
+        echo        Downloading llama3.2:3b ^(about 2 GB^)...
+        "%OLLAMA%" pull llama3.2:3b
+    ) else (
+        echo        Ollama already has a model installed.
+    )
 )
 
-REM Activate Virtual Environment
-call venv\Scripts\activate
-
-REM Upgrade PIP
-echo [INFO] Upgrading pip...
-python -m pip install --upgrade pip
-
-REM Install Backend Requirements
-echo [INFO] Installing backend dependencies...
-pip install -r backend/requirements.txt
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install backend dependencies.
-    pause
-    exit /b 1
-)
-
-REM Check Node.js
-node --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Node.js is not installed or not in PATH.
-    echo Please install Node.js (LTS) and try again.
-    pause
-    exit /b 1
-)
-
-REM Install Frontend Dependencies
-echo [INFO] Installing frontend dependencies...
-cd frontend
-call npm install
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install frontend dependencies.
-    cd ..
-    pause
-    exit /b 1
-)
-cd ..
-
-echo ===================================================
-echo Installation Complete!
-echo You can now run the application using start.bat
-echo ===================================================
+echo.
+echo ==================================================
+echo  Done. Start Guardian with start.bat
+echo ==================================================
 pause

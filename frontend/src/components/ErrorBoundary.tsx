@@ -1,57 +1,39 @@
-import { Component } from 'react';
-import type { ErrorInfo, ReactNode } from 'react';
-
-interface Props {
-    children: ReactNode;
-}
+import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 interface State {
-    hasError: boolean;
-    error: Error | null;
+  error: Error | null
 }
 
-class ErrorBoundary extends Component<Props, State> {
-    public state: State = {
-        hasError: false,
-        error: null
-    };
+export default class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+  state: State = { error: null }
 
-    public static getDerivedStateFromError(error: Error): State {
-        return { hasError: true, error };
-    }
+  static getDerivedStateFromError(error: Error): State {
+    return { error }
+  }
 
-    public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-        console.error('Uncaught error:', error, errorInfo);
-    }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Dashboard crashed:', error, info.componentStack)
+  }
 
-    public render() {
-        if (this.state.hasError) {
-            return (
-                <div className="min-h-screen bg-[#050510] flex items-center justify-center p-6 font-orbitron">
-                    <div className="max-w-md w-full glass-panel p-8 border border-red-500/50 shadow-[0_0_50px_rgba(255,0,0,0.2)]">
-                        <h1 className="text-red-500 text-2xl font-bold mb-4 tracking-tighter uppercase">System Malfunction</h1>
-                        <p className="text-gray-400 font-mono text-sm mb-6">
-                            A CRITICAL EXCEPTION HAS OCCURRED IN THE NEURAL INTERFACE.
-                            REBOOTING COMPONENT CORE...
-                        </p>
-                        <div className="bg-black/50 p-4 rounded border border-red-500/20 mb-6 overflow-hidden">
-                            <code className="text-xs text-red-400 break-words">
-                                {this.state.error?.message}
-                            </code>
-                        </div>
-                        <button
-                            onClick={() => window.location.reload()}
-                            className="w-full py-3 bg-red-500/10 border border-red-500 text-red-500 font-bold hover:bg-red-500 hover:text-white transition-all duration-300"
-                        >
-                            INITIALIZE RECOVERY
-                        </button>
-                    </div>
-                </div>
-            );
-        }
-
-        return this.props.children;
-    }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+          <h1 className="font-semibold">The dashboard hit an error</h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Monitoring keeps running on the server. Reload the page to reconnect.
+          </p>
+          <pre className="mt-4 overflow-auto rounded bg-zinc-950 p-3 text-xs text-red-300">{this.state.error.message}</pre>
+          <button
+            type="button"
+            onClick={() => location.reload()}
+            className="mt-4 h-9 rounded-md bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-500"
+          >
+            Reload
+          </button>
+        </div>
+      </div>
+    )
+  }
 }
-
-export default ErrorBoundary;

@@ -1,238 +1,229 @@
-import cv2
+"""
+Camera capture.
+
+A single background thread owns the capture device and keeps the most recent
+frame. Sources:
+  "auto"            first working local camera
+  "0", "1", ...     local camera index (webcam, DroidCam virtual camera, ...)
+  rtsp://, http://  IP camera / DroidCam / phone stream
+  path/to/file.mp4  a video file, looped (handy for testing)
+  "none"            camera disabled
+"""
 import os
-import time
+import platform
 import threading
-from typing import Generator, Optional
+import time
+
+import cv2
+
+SYSTEM = platform.system()
 
 
-def detect_available_camera(max_index: int = 10) -> tuple:
-    """Auto-detect the first available camera. Returns (index, backend_code)."""
-    print("=" * 50)
-    print("AUTO-DETECTING AVAILABLE CAMERAS...")
-    print("=" * 50)
-    
+def _local_backends():
+    if SYSTEM == "Windows":
+        return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+    if SYSTEM == "Darwin":
+        return [cv2.CAP_AVFOUNDATION, cv2.CAP_ANY]
+    return [cv2.CAP_V4L2, cv2.CAP_ANY]
+
+
+def parse_source(source: str):
+    """Returns (kind, value) where kind is none|auto|index|url|file."""
+    s = (source or "").strip()
+    if not s or s.lower() == "none":
+        return "none", None
+    if s.lower() == "auto":
+        return "auto", None
+    if s.isdigit():
+        return "index", int(s)
+    if "://" in s:
+        return "url", s
+    return "file", os.path.expanduser(s)
+
+
+def open_local_camera(index: int):
+    for backend in _local_backends():
+        try:
+            cap = cv2.VideoCapture(index, backend)
+        except Exception:
+            continue
+        if cap.isOpened():
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return cap
+        cap.release()
+    return None
+
+
+def scan_local_cameras(max_index: int = 6, skip: set[int] | None = None) -> list[dict]:
+    found = []
     for index in range(max_index):
-        print(f"  Testing camera index {index}...", end=" ")
-        
-        # Try DirectShow first (better Windows compatibility)
-        try:
-            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                cap.release()
-                if ret and frame is not None:
-                    print(f"[OK] DSHOW working (frame: {frame.shape})")
-                    print(f">>> Selected camera index: {index} with DirectShow")
-                    print("=" * 50)
-                    return index, cv2.CAP_DSHOW
-                else:
-                    print("[X] DSHOW opens but no frame", end=" ")
-            else:
-                print("[X] DSHOW can't open", end=" ")
-            cap.release()
-        except Exception as e:
-            print(f"[X] DSHOW error: {e}", end=" ")
-        
-        # Try default backend
-        try:
-            cap = cv2.VideoCapture(index)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                cap.release()
-                if ret and frame is not None:
-                    print(f"[OK] DEFAULT working")
-                    print(f">>> Selected camera index: {index} with default backend")
-                    print("=" * 50)
-                    return index, cv2.CAP_ANY
-            cap.release()
-        except:
-            pass
-        
-        print("")  # Newline after all attempts for this index
-    
-    print("[WARNING] NO WORKING CAMERAS FOUND - defaulting to index 0")
-    print("=" * 50)
-    return 0, cv2.CAP_ANY
+        if skip and index in skip:
+            continue
+        cap = open_local_camera(index)
+        if cap is None:
+            continue
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        found.append({"index": index, "width": w, "height": h})
+    return found
 
 
 class VideoService:
-    def __init__(self, source="auto"):
-        print(f"\n[VideoService] Initializing with source={source}")
-        
-        self.backend = cv2.CAP_DSHOW  # Default to DirectShow on Windows
-        
-        # Auto-detect camera if source is "auto" or None
-        if source is None or source == "auto":
-            self.source, self.backend = detect_available_camera()
-        else:
-            self.source = source
-            
-        self.camera = None
-        self.is_running = False
-        self.lock = threading.Lock()
-        self.current_frame = None
-        self._failed_reads = 0
-        self._max_failed_reads = 30
-        self._camera_ok = False
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._frame = None
+        self._frame_id = 0
+        self._frame_time = 0.0
+        self.source = "none"
+        self.kind = "none"
+        self.active_index: int | None = None
+        self.connected = False
+        self.error: str | None = None
+        self.width = 0
+        self.height = 0
+        self.fps = 0.0
 
-    def _open_camera(self, source, backend=None):
-        """Open camera with best available backend."""
-        if backend is None:
-            backend = self.backend
-            
-        try:
-            cap = cv2.VideoCapture(source, backend)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    return cap, True
-            cap.release()
-        except:
-            pass
-        
-        # Fallback to default backend
-        try:
-            cap = cv2.VideoCapture(source)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    return cap, True
-            cap.release()
-        except:
-            pass
-            
-        return None, False
-
-    def start(self):
-        if self.is_running:
-            print("[VideoService] Already running")
+    # ---- lifecycle -----------------------------------------------------
+    def start(self, source: str) -> None:
+        self.stop()
+        self.source = source
+        self.kind, _ = parse_source(source)
+        self.error = None
+        if self.kind == "none":
+            self.error = "Camera disabled"
             return
-        
-        print(f"[VideoService] Starting on source {self.source} with backend {self.backend}...")
-        
-        self.camera, success = self._open_camera(self.source, self.backend)
-        
-        if not success:
-            print(f"[VideoService] [WARNING] Could not open camera {self.source}. Attempting auto-detection...")
-            self._try_alternate_camera()
-        else:
-            # Read initial frame
-            ret, test_frame = self.camera.read()
-            if ret and test_frame is not None:
-                print(f"[VideoService] [OK] Camera {self.source} confirmed working. Frame shape: {test_frame.shape}")
-                self._camera_ok = True
-                with self.lock:
-                    self.current_frame = test_frame
-            else:
-                print(f"[VideoService] [WARNING] Camera opened but can't read. Trying alternate...")
-                self._try_alternate_camera()
-        
-        self.is_running = True
-        self.thread = threading.Thread(target=self._update, daemon=True)
-        self.thread.start()
-        print(f"[VideoService] [OK] Update thread started")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="video")
+        self._thread.start()
 
-    def _try_alternate_camera(self):
-        """Try to find and switch to an alternate working camera."""
-        if self.camera:
+    def stop(self) -> None:
+        if self._thread and self._thread.is_alive():
+            self._stop.set()
+            self._thread.join(timeout=5)
+        self._thread = None
+        with self._lock:
+            self._frame = None
+        self.connected = False
+        self.fps = 0.0
+        self.active_index = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    # ---- capture loop --------------------------------------------------
+    def _open(self):
+        kind, value = parse_source(self.source)
+        if kind == "auto":
+            for index in range(6):
+                if self._stop.is_set():
+                    return None
+                cap = open_local_camera(index)
+                if cap is not None:
+                    self.active_index = index
+                    return cap
+            raise RuntimeError("No local camera found")
+        if kind == "index":
+            cap = open_local_camera(value)
+            if cap is None:
+                raise RuntimeError(f"Camera {value} could not be opened (in use by another app, or not connected)")
+            self.active_index = value
+            return cap
+        if kind == "file" and not os.path.isfile(value):
+            raise RuntimeError(f"Video file not found: {value}")
+        cap = cv2.VideoCapture(value)
+        if not cap.isOpened():
+            cap.release()
+            raise RuntimeError(f"Could not open stream {value}")
+        if kind == "url":
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # keep latency low on IP cameras
+        return cap
+
+    def _run(self) -> None:
+        backoff = 1.0
+        while not self._stop.is_set():
             try:
-                self.camera.release()
-            except:
-                pass
-            
-        new_source, new_backend = detect_available_camera()
-        print(f"[VideoService] Switching from camera {self.source} to {new_source}")
-        self.source = new_source
-        self.backend = new_backend
-        
-        self.camera, success = self._open_camera(self.source, self.backend)
-        
-        if success:
-            ret, frame = self.camera.read()
-            if ret and frame is not None:
-                self._camera_ok = True
-                with self.lock:
-                    self.current_frame = frame
-                print(f"[VideoService] [OK] Alternate camera {new_source} working")
-                return
-                
-        self._camera_ok = False
-        print("[VideoService] [X] No working camera found. Running in passive mode.")
-
-    def _update(self):
-        while self.is_running:
-            if not self.camera or not self.camera.isOpened():
-                time.sleep(0.5)
+                cap = self._open()
+            except Exception as exc:
+                self.error = str(exc)
+                self.connected = False
+                print(f"[video] {exc}. Retrying in {backoff:.0f}s")
+                if self._stop.wait(backoff):
+                    break
+                backoff = min(backoff * 2, 15.0)
                 continue
-                
-            try:
-                ret, frame = self.camera.read()
-                if ret and frame is not None:
-                    self._failed_reads = 0
-                    self._camera_ok = True
-                    with self.lock:
-                        self.current_frame = frame
-                else:
-                    self._failed_reads += 1
-                    if self._failed_reads >= self._max_failed_reads:
-                        print(f"[VideoService] [WARNING] Camera {self.source} unresponsive. Retrying...")
-                        self._try_alternate_camera()
-                        self._failed_reads = 0
-                    time.sleep(0.1)
-            except Exception as e:
-                print(f"[VideoService] Read error: {e}")
-                time.sleep(0.5)
+            if cap is None:
+                break
 
-    def get_frame(self) -> Optional[object]:
-        with self.lock:
-            if self.current_frame is not None:
-                return self.current_frame.copy()
-            return None
+            backoff = 1.0
+            self.error = None
+            is_file = self.kind == "file"
+            file_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            if not 1 <= file_fps <= 120:
+                file_fps = 25.0
+            failures, count, window_start = 0, 0, time.time()
+            print(f"[video] Connected to {self.source}")
 
-    def generate_frames(self) -> Generator[bytes, None, None]:
-        while True:
-            frame = self.get_frame()
-            if frame is None:
-                time.sleep(0.01)
-                continue
-            
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if not ret:
-                continue
-            
-            frame_bytes = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    if is_file:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop the file
+                        failures += 1
+                        if failures < 3:
+                            continue
+                    failures += 1
+                    if failures >= 30:
+                        self.error = "Camera stopped sending frames"
+                        print(f"[video] {self.error}; reconnecting")
+                        break
+                    time.sleep(0.05)
+                    continue
+                failures = 0
+                with self._lock:
+                    self._frame = frame
+                    self._frame_id += 1
+                    self._frame_time = time.time()
+                self.connected = True
+                self.height, self.width = frame.shape[:2]
 
-    def stop(self):
-        print("[VideoService] Stopping...")
-        self.is_running = False
-        if self.camera:
-            try:
-                self.camera.release()
-            except:
-                pass
-        print("[VideoService] Stopped")
-        
-    def get_status(self) -> dict:
-        """Get current camera status for debugging."""
+                count += 1
+                elapsed = time.time() - window_start
+                if elapsed >= 2.0:
+                    self.fps = round(count / elapsed, 1)
+                    count, window_start = 0, time.time()
+                if is_file:
+                    time.sleep(1.0 / file_fps)
+
+            cap.release()
+            self.connected = False
+            self.fps = 0.0
+            if not self._stop.is_set():
+                self._stop.wait(1.0)
+
+    # ---- access --------------------------------------------------------
+    def get_frame(self):
+        """Returns (frame, frame_id, timestamp) or (None, id, 0). The frame must not be modified."""
+        with self._lock:
+            return self._frame, self._frame_id, self._frame_time
+
+    def status(self) -> dict:
+        age = time.time() - self._frame_time if self._frame_time else None
+        live = self.connected and age is not None and age < 3
         return {
             "source": self.source,
-            "is_running": self.is_running,
-            "camera_ok": self._camera_ok,
-            "has_frame": self.current_frame is not None,
-            "failed_reads": self._failed_reads
+            "kind": self.kind,
+            "active_index": self.active_index,
+            "connected": live,
+            "error": self.error if not live else None,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps if live else 0.0,
         }
 
 
-# Source can be "auto" (auto-detect), 0/1/2... (webcam index), or a URL string (IP cam)
-_video_source = os.getenv("VIDEO_SOURCE", "auto")
-if _video_source.isdigit():
-    _video_source = int(_video_source)
-
-print(f"\n{'='*50}")
-print("INITIALIZING VIDEO SERVICE")
-print(f"VIDEO_SOURCE env: {os.getenv('VIDEO_SOURCE', 'not set (using auto)')}")
-print(f"{'='*50}\n")
-
-video_service = VideoService(source=_video_source)
+video_service = VideoService()

@@ -1,230 +1,283 @@
-import time
+"""
+Threat escalation.
+
+  0 Clear       nobody unrecognised in view
+  1 Detected    unrecognised person appears          -> voice greeting
+  2 Loitering   still there after level2_after secs  -> voice warning (+ recording by default)
+  3 Intruder    still there after level3_after secs  -> owner alerted
+  4 Alarm       still there after level4_after secs  -> siren
+
+An incident ends when nobody unrecognised has been seen for clear_after
+seconds, when the system is disarmed, or when the alarm is reset from the
+dashboard. A manual panic stays at level 4 until it is reset.
+"""
 import threading
-from typing import List, Optional
-from models_fusion import Detection, SecurityEvent, SessionLocal
-from .ai_service import ai_service as default_ai_service
-from .notification_service import notification_service as default_notification_service
-from .recording_service import recording_service as default_recording_service
-from .siren_service import siren_service
+import time
+from typing import Callable, List
+
+from models.domain import Detection
+from services.ai_service import ai_service
+from services.event_service import event_service
+from services.notification_service import notification_service
+from services.recording_service import recording_service
+from services.settings_service import settings_service
+from services.siren_service import siren_service
+from services.tts_service import tts_service
+
+LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
+SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
+ALERT_REPEAT_SECONDS = 120
+INSIDER_LOG_SECONDS = 300
+PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
+
+
+def voice_cooldown(persistence: int) -> float:
+    """Seconds between spoken warnings: 40 s at persistence 0, 8 s at 100."""
+    return 40.0 - 0.32 * persistence
+
 
 class BrainService:
-    def __init__(self, ai_service=None, notification_service=None, recording_service=None):
-        self.ai_service = ai_service or default_ai_service
-        self.notification_service = notification_service or default_notification_service
-        self.recording_service = recording_service or default_recording_service
-        
-        self.threat_level = 0  # 0: Safe, 1: Low, 2: Medium, 3: High, 4: Critical
-        self.last_detection_time = 0
-        self.first_detection_time = 0
-        self.is_monitoring = True
-        self.lock = threading.Lock()
-        
-        # Cooldowns to prevent spam
-        self.last_ai_response_time = 0
-        self.last_alert_time = 0
-        
-        # Subtitle State
-        self.last_spoken_text = ""
-        self.last_spoken_time = 0
-        
-        print("BrainService Initialized: Logic Core Online")
+    def __init__(self, settings=settings_service, ai=ai_service, tts=tts_service, siren=siren_service,
+                 recorder=recording_service, notifier=notification_service, events=event_service,
+                 clock: Callable[[], float] = time.time):
+        self.settings, self.ai, self.tts, self.siren = settings, ai, tts, siren
+        self.recorder, self.notifier, self.events, self.clock = recorder, notifier, events, clock
+        self.snapshot: Callable[[], bytes | None] = lambda: None
+        self._lock = threading.RLock()
 
-    def log_event(self, event_type: str, description: str, severity: str = "LOW"):
-        """
-        Persist security event to database.
-        """
-        db = None
-        try:
-            db = SessionLocal()
-            event = SecurityEvent(
-                event_type=event_type,
-                description=description,
-                severity=severity
-            )
-            db.add(event)
-            db.commit()
-        except Exception as e:
-            print(f"Failed to log event: {e}")
-        finally:
-            if db:
-                db.close()
+        self.threat_level = 0
+        self.manual = False
+        self.simulated = False
+        self.incident_start: float | None = None
+        self.last_seen: float | None = None
+        self._incident_id = 0
+        self._peak = 0
+        self._spoken_level = 0
+        self._siren_fired = False
+        self.last_ai_time = 0.0
+        self.last_alert_time = 0.0
+        self.said: List[str] = []
 
-    def process_frame(self, detections: List[Detection], loop=None):
-        """
-        Main logic loop called for each processed frame.
-        """
-        if not self.is_monitoring:
+        self.persons = 0
+        self.insiders_in_view: List[str] = []
+        self._insider_seen: dict[str, float] = {}
+        self._insider_logged: dict[str, float] = {}
+
+        self.last_message: str | None = None
+        self.last_message_time: float | None = None
+        self.last_message_source: str | None = None
+
+        recorder.on_finished = self._on_recording_finished
+
+    @property
+    def armed(self) -> bool:
+        return self.settings.get().armed
+
+    # ---- inputs ---------------------------------------------------------
+    def process(self, detections: List[Detection], now: float | None = None) -> None:
+        now = self.clock() if now is None else now
+        cfg = self.settings.get()
+        with self._lock:
+            persons = [d for d in detections if d.class_name == "person"]
+            known = [d for d in persons if d.known]
+            unknown = [d for d in persons if not d.known]
+            self.persons = len(persons)
+            self.insiders_in_view = sorted({d.identity for d in known if d.identity})
+
+            for name in self.insiders_in_view:
+                self._insider_seen[name] = now
+                if now - self._insider_logged.get(name, 0) >= INSIDER_LOG_SECONDS:
+                    self._insider_logged[name] = now
+                    self.events.log("INSIDER", f"Recognised {name}", "INFO")
+
+            if unknown and not any(d.simulated for d in unknown):
+                # A recognised insider who turns away from the camera should not trigger an alarm.
+                grace = cfg.detection.insider_grace_seconds
+                recent = [n for n, t in self._insider_seen.items() if now - t <= grace]
+                if recent and not any(d.face_visible for d in unknown) and len(persons) <= len(recent):
+                    unknown = []
+
+            if unknown and cfg.armed:
+                if self.incident_start is None:
+                    self._begin_incident(now, simulated=any(d.simulated for d in unknown))
+                    self.events.log("DETECTION", "Unrecognised person detected" + (" (test)" if self.simulated else ""), "LOW")
+                self.last_seen = now
+            self._update(now)
+
+    def tick(self, now: float | None = None) -> None:
+        with self._lock:
+            self._update(self.clock() if now is None else now)
+
+    # ---- state machine --------------------------------------------------
+    def _begin_incident(self, now: float, simulated: bool = False) -> None:
+        self._incident_id += 1
+        self.incident_start = now
+        self.last_seen = now
+        self.threat_level = 1
+        self._peak = 1
+        self._spoken_level = 0
+        self._siren_fired = False
+        self.simulated = simulated
+        self.said = []
+        self.last_alert_time = 0.0
+
+    def _update(self, now: float) -> None:
+        if self.incident_start is None:
             return
+        esc = self.settings.get().escalation
+        if not self.manual and (self.last_seen is None or now - self.last_seen >= esc.clear_after):
+            self._end_incident(now, "Person left the area")
+            return
+        if not self.manual:
+            # Only time the person was actually on camera counts; a level must not climb
+            # while the scene is empty and the incident is waiting to clear.
+            elapsed = self.last_seen - self.incident_start
+            level = 1 + (elapsed >= esc.level2_after) + (elapsed >= esc.level3_after) + (elapsed >= esc.level4_after)
+            if level > self.threat_level:
+                self.threat_level = level
+                self.events.log("ESCALATION", f"Threat level {level} ({LEVEL_NAMES[level]}) after {int(elapsed)}s",
+                                SEVERITY[level])
+        self._peak = max(self._peak, self.threat_level)
+        self._countermeasures(now)
 
-        with self.lock:
-            current_time = time.time()
-            # Filter for persons using Pydantic model
-            persons_detected = [d for d in detections if d.class_name == 'person']
+    def _countermeasures(self, now: float) -> None:
+        cfg = self.settings.get()
+        esc, level = cfg.escalation, self.threat_level
+        seconds = int(now - (self.incident_start or now))
 
-            if persons_detected:
-                self._handle_person_detection(persons_detected, current_time, loop)
-            else:
-                self._handle_no_detection(current_time)
+        if level >= esc.record_at_level or self.manual:
+            reason = "panic" if self.manual else ("test" if self.simulated else "intruder")
+            fresh = not self.recorder.active
+            name = self.recorder.start(reason, level)
+            if name and fresh:
+                self.events.log("RECORDING", "Recording started", "INFO", recording=name)
+        self.recorder.note_level(level)
 
-    def _handle_person_detection(self, detections: List[Detection], current_time: float, loop=None):
-        """
-        Escalation logic when a person is seen.
-        """
-        # --- INSIDER LOGIC ---
-        # Analyze detections to see if we have unknown intruders
-        unknown_persons = [d for d in detections if not d.known]
-        known_persons = [d for d in detections if d.known]
-        
-        # If there are NO unknown persons (i.e., everyone is an insider), we do NOT escalate.
-        if not unknown_persons and known_persons:
-             # Log insider sighting occasionally
-             if current_time - self.last_detection_time > 10.0:
-                 names = ", ".join([d.identity for d in known_persons])
-                 print(f"Insider(s) Detected: {names}. Systems at ease.")
-                 self.log_event("INSIDER_ACCESS", f"Authorized personnel identified: {names}", "INFO")
-             
-             # Reset threat level as we are safe
-             self.threat_level = 0
-             self.first_detection_time = 0 # specific to threat escalation
-             self.last_detection_time = current_time
-             return # EXIT EARLY - Do not escalate
+        if (level >= esc.alert_at_level or self.manual) and now - self.last_alert_time >= ALERT_REPEAT_SECONDS:
+            self.last_alert_time = now
+            prefix = "[TEST] " if self.simulated else ""
+            title = f"{prefix}{'Alarm raised' if self.manual else 'Intruder on camera'}"
+            msg = (f"{'Panic button pressed.' if self.manual else f'Unrecognised person on camera for {seconds}s.'} "
+                   f"Threat level {level} ({LEVEL_NAMES[level]}).")
+            if self.notifier.send_alert(title, msg, SEVERITY[level], self.snapshot()):
+                self.events.log("ALERT", f"Owner alerted: {msg}", SEVERITY[level])
 
-        # If we have unknown persons, proceed with normal escalation
-        
-        # Logic: If no detection for > 10 seconds (increased for robustness), we treat it as a NEW event.
-        if self.last_detection_time == 0 or (current_time - self.last_detection_time > 10.0):
-            self.first_detection_time = current_time # Start clock NOW
-            self.threat_level = 1 # Reset to Low
-            print(f"Target Acquired (Reset): Time {current_time}")
-            self.log_event("DETECTION", "New subject identified.", "LOW")
-        
-        self.last_detection_time = current_time
-        duration = current_time - self.first_detection_time
-        
-        # Escalation Logic based on duration
-        previous_level = self.threat_level
-        
-        if duration > 15: # Critical after 15s
+        if not self._siren_fired and (self.manual or (esc.siren_enabled and level >= esc.siren_at_level)):
+            self._siren_fired = True
+            if self.siren.start(esc.siren_max_seconds):
+                self.events.log("SIREN", "Siren sounding", "CRITICAL")
+
+        someone_there = self.manual or (self.last_seen is not None and now - self.last_seen <= PRESENCE_SECONDS)
+        due = now - self.last_ai_time >= voice_cooldown(cfg.ai.persistence)
+        if someone_there and (level > self._spoken_level or due):
+            incident = self._incident_id
+            started = self.ai.request_warning(
+                lambda result: self._on_warning(result, incident),
+                level=level, seconds=seconds, manual=self.manual, said=list(self.said))
+            if started:
+                self.last_ai_time = now
+                self._spoken_level = level
+
+    def _on_warning(self, result: dict, incident: int) -> None:
+        with self._lock:
+            if incident != self._incident_id or self.incident_start is None:
+                return  # the person left while the model was thinking
+            text = result["text"]
+            self.said.append(text)
+            self.last_message, self.last_message_time = text, time.time()
+            self.last_message_source = result["source"]
+        ai = self.settings.get().ai
+        if ai.voice_enabled:
+            self.tts.say(text, ai.voice_rate)
+        via = f"via {result['model']}" if result["source"] == "llm" else "pre-written line, model unavailable"
+        self.events.log("VOICE", f"{text} ({via}, {result['latency_ms']} ms)", "INFO")
+
+    def _end_incident(self, now: float, reason: str) -> None:
+        duration = int(now - (self.incident_start or now))
+        self.events.log("CLEARED", f"{reason}. Incident lasted {duration}s, peak level {self._peak}.", "LOW")
+        self._incident_id += 1
+        self.incident_start = None
+        self.last_seen = None
+        self.threat_level = 0
+        self.manual = False
+        self.simulated = False
+        self.said = []
+        self.siren.stop()
+        self.recorder.stop()
+
+    # ---- dashboard actions ----------------------------------------------
+    def trigger_panic(self) -> None:
+        now = self.clock()
+        with self._lock:
+            if self.incident_start is None:
+                self._begin_incident(now)
+            self.manual = True
             self.threat_level = 4
-        elif duration > 10: # High after 10s
-            self.threat_level = 3
-        elif duration > 5: # Medium after 5s
-            self.threat_level = 2
-        
-        if self.threat_level > previous_level:
-            print(f"Escalating Threat Level: {previous_level} -> {self.threat_level}")
-            severity_map = {2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
-            self.log_event("ESCALATION", f"Threat Level escalated to {self.threat_level}", severity_map.get(self.threat_level, "LOW"))
- 
-        # Actions based on Threat Level
-        self._execute_countermeasures(current_time, loop)
+            self._peak = 4
+            self._siren_fired = False
+            self.last_alert_time = 0.0
+            self._spoken_level = 0
+            self.events.log("PANIC", "Alarm raised from the dashboard", "CRITICAL")
+            self._countermeasures(now)
 
-    def _handle_no_detection(self, current_time: float):
-        """
-        De-escalation logic.
-        """
-        if self.last_detection_time > 0 and (current_time - self.last_detection_time > 15.0):
-            if self.threat_level > 0:
-                print("Target Lost: De-escalating")
-                self.log_event("DE-ESCALATION", "Target lost. Returning to safe state.", "LOW")
-                self.threat_level = 0
-                self.first_detection_time = 0
-                self.last_detection_time = 0
-                self.recording_service.stop_recording("cam1") # Stop if recording
-                siren_service.stop_siren()  # Stop siren if playing
+    def reset_alarm(self) -> bool:
+        with self._lock:
+            if self.incident_start is None:
+                self.siren.stop()
+                return False
+            self.events.log("RESET", "Alarm acknowledged from the dashboard", "INFO")
+            self._end_incident(self.clock(), "Alarm reset")
+            return True
 
-    def _execute_countermeasures(self, current_time: float, loop=None):
-        """
-        Triggers AI, Alerts, Recording based on threat level.
-        """
-        # AI Response (Voice/Text) - regulated by cooldown
-        if current_time - self.last_ai_response_time > 8.0:
-            prompt = self._get_ai_prompt()
-            if prompt:
-                print(f"Triggering AI Response (Level {self.threat_level})...")
-                # Fire and forget async task safely from thread
-                import asyncio
-                if loop:
-                    asyncio.run_coroutine_threadsafe(self._run_ai_task(prompt), loop)
-                else:
-                    # Fallback (unsafe if no loop, but shouldn't happen with new StreamService)
-                    asyncio.create_task(self._run_ai_task(prompt))
-                self.last_ai_response_time = current_time
+    def set_armed(self, armed: bool) -> None:
+        if armed == self.armed:
+            return
+        self.settings.update({"armed": armed})
+        with self._lock:
+            self.events.log("ARMED" if armed else "DISARMED",
+                            "System armed" if armed else "System disarmed: detections will not raise alarms", "INFO")
+            if not armed and self.incident_start is not None and not self.manual:
+                self._end_incident(self.clock(), "System disarmed")
 
-        # External Notification - regulated by cooldown
-        if self.threat_level >= 3:
-             # Trigger Recording if not already active
-             self.recording_service.start_recording(camera_id="cam1")
-             
-             if (current_time - self.last_alert_time > 30.0):
-                 msg = f"Security Breach Detected! Threat Level {self.threat_level}. Duration: {int(current_time - self.first_detection_time)}s"
-                 self.notification_service.send_alert("Intruder Alert", msg, severity="high")
-                 self.log_event("ALERT", msg, "HIGH")
-                 self.last_alert_time = current_time
-        
-        # CRITICAL LEVEL 4: Siren + Email with video
-        if self.threat_level >= 4:
-            # Start siren alarm
-            siren_service.start_siren(duration_seconds=60)
-            
-            # Send email with video clip if not sent recently
-            if not hasattr(self, '_last_email_time') or (current_time - self._last_email_time > 120.0):
-                self._last_email_time = current_time
-                # Find the most recent recording
-                import glob
-                recordings = glob.glob("recordings/event_cam1_*.mp4")
-                video_path = max(recordings, key=lambda x: x) if recordings else None
-                
-                msg = f"CRITICAL INTRUDER ALERT! Duration: {int(current_time - self.first_detection_time)}s. Immediate action required!"
-                self.notification_service.send_email_with_video(
-                    subject="CRITICAL INTRUDER - Immediate Response Required",
-                    body=msg,
-                    video_path=video_path
-                )
-                self.log_event("EMAIL_ALERT", "Email with video sent to owner", "CRITICAL")
+    def speak(self, text: str) -> bool:
+        ai = self.settings.get().ai
+        text = " ".join(text.split())[:300]
+        if not text:
+            return False
+        with self._lock:
+            self.last_message, self.last_message_time, self.last_message_source = text, time.time(), "operator"
+        self.events.log("VOICE", f"{text} (typed by operator)", "INFO")
+        return self.tts.say(text, ai.voice_rate, interrupt=True)
 
-    def _get_ai_prompt(self):
-        style = "polite"
-        if self.ai_service.personality["intimidation"] > 70:
-            style = "very aggressive and intimidating"
-        elif self.ai_service.personality["humor"] > 50:
-            style = "witty and slightly sarcastic but firm"
-            
-        if self.threat_level == 1:
-            return f"A stranger has been spotted. {style.capitalize()}ly ask them to identify themselves."
-        elif self.threat_level == 2:
-            return f"The stranger is still there. In a {style} style, firmly state that this is a private area."
-        elif self.threat_level == 3:
-            return f"The intruder is persisting. Issue a stern warning that security has been notified. Style: {style}."
-        elif self.threat_level == 4:
-            return f"CRITICAL: Issue a final warning. Style: {style}. Order the intruder to leave immediately or face consequences."
-        return None
+    def _on_recording_finished(self, info: dict) -> None:
+        label = {"panic": "panic", "test": "test", "intruder": "intrusion"}.get(info["reason"], info["reason"])
+        self.events.log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip (peak level {info['max_level']})",
+                        "INFO", recording=info["file"])
+        esc = self.settings.get().escalation
+        if info["max_level"] >= esc.alert_at_level or info["reason"] == "panic":
+            self.notifier.send_clip(f"{'[TEST] ' if info['reason'] == 'test' else ''}Incident clip",
+                                    f"Recording of the {label} ({info['duration']}s, peak level {info['max_level']}).",
+                                    info["path"])
+        self.recorder.prune(self.settings.get().recording.retention_days)
 
-    async def _run_ai_task(self, prompt):
-        """
-        Helper to run AI generation asynchronously.
-        """
-        try:
-           # Set current threat level on AI service for fallback messages
-           self.ai_service._current_threat_level = self.threat_level
-           
-           response = await self.ai_service.generate_response(prompt)
-           print(f"AI: {response}")
-           
-           # Update Subtitle State (Prioritize this over audio)
-           self.last_spoken_text = response
-           self.last_spoken_time = time.time()
-           
-           # Speak the response locally
-           try:
-               self.ai_service.speak_local(response)
-           except Exception as tts_error:
-               print(f"TTS Error (Non-fatal): {tts_error}")
-           
-           self.log_event("AI_RESPONSE", response[:100], "MEDIUM")
-        except Exception as e:
-           print(f"AI Task Error: {e}")
-           import traceback
-           traceback.print_exc()
+    # ---- reporting -------------------------------------------------------
+    def status(self) -> dict:
+        now = self.clock()
+        with self._lock:
+            return {
+                "armed": self.armed,
+                "threat_level": self.threat_level,
+                "threat_label": LEVEL_NAMES[self.threat_level],
+                "manual_alarm": self.manual,
+                "test": self.simulated,
+                "incident_started": self.incident_start,
+                "incident_seconds": int(now - self.incident_start) if self.incident_start else 0,
+                "persons": self.persons,
+                "insiders_in_view": self.insiders_in_view,
+                "last_message": self.last_message,
+                "last_message_time": self.last_message_time,
+                "last_message_source": self.last_message_source,
+            }
+
 
 brain_service = BrainService()

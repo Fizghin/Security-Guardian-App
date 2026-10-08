@@ -1,21 +1,25 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 venv/
-env/
+.venv/
+.pytest_cache/
+
+# Secrets / local config
 .env
 
-# Node/Frontend
-node_modules/
-dist/
-.DS_Store
-
-# IDE
-.vscode/
-.idea/
-
-# Custom
+# Runtime data (database, recordings, insider photos, downloaded models, settings)
+backend/storage/
 backend/faces_db/
 backend/*.db
 backend/recordings/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
