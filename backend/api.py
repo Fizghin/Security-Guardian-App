@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from config import BACKEND_DIR, PHONE_PORT
+from config import BACKEND_DIR, PHONE_PORT, PHONES_ENABLED, PUBLIC_URL
 from services.ai_service import AIError, WarningContext, ai_service
 from services.camera_service import camera_manager
 from services.detection_service import detection_service
@@ -61,7 +61,7 @@ def status():
         "siren": siren_service.status(),
         "ai": ai_service.status(),
         "faces": face_service.status(),
-        "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT},
+        "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT},
         "server_time": time.time(),
     }
 
@@ -128,13 +128,13 @@ def _camera_view(cfg) -> dict:
 @router.get("/cameras")
 def list_cameras():
     return {"cameras": [_camera_view(c) for c in settings_service.get().cameras],
-            "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT, "addresses": lan_addresses()}}
+            "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT, "addresses": lan_addresses()}}
 
 
 @router.post("/cameras")
 def add_camera(req: CameraCreate):
-    if req.source == PHONE_SOURCE and PHONE_PORT <= 0:
-        raise HTTPException(409, "Phone cameras are turned off (PHONE_PORT=0 in backend/.env)")
+    if req.source == PHONE_SOURCE and not PHONES_ENABLED:
+        raise HTTPException(409, "Phone cameras are turned off (PHONE_PORT=0 and no PUBLIC_URL in backend/.env)")
     try:
         cam = settings_service.add_camera(req.name, req.source, req.audio)
     except SettingsError as exc:
@@ -181,7 +181,7 @@ def phone_pairing(camera_id: str, address: str = ""):
     urls = pairing_urls(cam.token)
     if address:
         urls = sorted(urls, key=lambda u: address not in u)
-    return {"urls": urls, "qr_svg": qr_svg(urls[0]) if urls else None, "port": PHONE_PORT}
+    return {"urls": urls, "qr_svg": qr_svg(urls[0]) if urls else None, "port": PHONE_PORT, "public_url": PUBLIC_URL}
 
 
 class SourceTest(BaseModel):
@@ -260,9 +260,20 @@ async def faces_on_camera(camera_id: str):
 @ws_router.websocket("/ws/stream/{camera_id}")
 async def ws_stream(websocket: WebSocket, camera_id: str):
     await websocket.accept()
+
+    async def until_closed() -> None:
+        # The dashboard never sends anything, so this returns when it leaves or the server stops.
+        # Without it a camera with no video would never notice and keep this handler alive forever.
+        try:
+            while (await websocket.receive())["type"] != "websocket.disconnect":
+                pass
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            pass
+
+    closed = asyncio.create_task(until_closed())
     last = -1
     try:
-        while True:
+        while not closed.done():
             unit = camera_manager.units.get(camera_id)
             jpeg, frame_id = unit.latest_jpeg() if unit else (None, -1)
             if jpeg is not None and frame_id != last:
@@ -272,6 +283,8 @@ async def ws_stream(websocket: WebSocket, camera_id: str):
                 await asyncio.sleep(0.02)
     except (WebSocketDisconnect, RuntimeError, OSError):
         pass  # the dashboard went away mid-send
+    finally:
+        closed.cancel()
 
 
 # ---- phones (also reachable on the HTTPS phone port) ------------------------------
@@ -553,7 +566,7 @@ def system():
         "faces": face_service.status(),
         "notifications": notification_service.status(),
         "ai": ai_service.status(),
-        "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT, "addresses": lan_addresses()},
+        "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT, "addresses": lan_addresses(), "public_url": PUBLIC_URL},
     }
 
 

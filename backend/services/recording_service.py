@@ -298,7 +298,6 @@ class Recorder:
             (self.dir / f"{final.stem}.jpg").unlink(missing_ok=True)
             print(f"[rec:{self.camera_id}] Discarded {cur['file']}")
             return
-        cur["part"].replace(final)
         meta = {
             "reason": cur["reason"],
             "started": datetime.fromtimestamp(cur["started"]).astimezone().isoformat(),
@@ -309,7 +308,9 @@ class Recorder:
             "camera_id": self.camera_id,
             "camera": self.camera_name(),
         }
+        # Metadata first: a listing must never see the finished clip without its camera and reason
         (self.dir / f"{final.stem}.json").write_text(json.dumps(meta), encoding="utf-8")
+        cur["part"].replace(final)
         print(f"[rec:{self.camera_id}] Saved {final.name} ({meta['duration']}s)")
         if self.on_finished:
             info = {**meta, "file": final.name, "path": str(final)}

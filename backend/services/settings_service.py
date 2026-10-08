@@ -141,8 +141,10 @@ def _env_defaults() -> dict:
     else:
         base_url = env_str("OPENAI_BASE_URL", OPENAI_COMPAT_DEFAULT_URL)
         model = env_str("OPENAI_MODEL")
+    source = env_str("VIDEO_SOURCE", "auto")
     return {
-        "cameras": [{"id": "cam1", "name": "Camera 1", "source": env_str("VIDEO_SOURCE", "auto")}],
+        "cameras": [{"id": "cam1", "name": "Camera 1", "source": source,
+                     "audio": "device" if source == PHONE_SOURCE else "server"}],
         "ai": {
             "provider": provider,
             "base_url": base_url,
@@ -216,8 +218,9 @@ class SettingsService:
     def _persist_generated(self) -> None:
         """Phone tokens are generated during validation; save them so pairing links stay valid."""
         cams = self._overrides.get("cameras")
-        if isinstance(cams, list) and any(isinstance(c, dict) and c.get("source") == PHONE_SOURCE and not c.get("token")
-                                          for c in cams):
+        stored = {c.get("id"): c.get("token") for c in cams if isinstance(c, dict)} if isinstance(cams, list) else {}
+        # Also covers VIDEO_SOURCE=phone, where the camera comes from .env rather than settings.json
+        if any(c.is_phone and stored.get(c.id) != c.token for c in self._settings.cameras):
             self._overrides["cameras"] = [c.model_dump() for c in self._settings.cameras]
             self._save()
 

@@ -88,3 +88,11 @@ def test_listeners_receive_old_and_new(tmp_path):
     svc.on_change(lambda old, new: seen.append((len(old.cameras), len(new.cameras))))
     svc.add_camera("Garage", "2")
     assert seen == [(1, 2)]
+
+
+def test_phone_camera_from_env_keeps_its_pairing_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_SOURCE", "phone")
+    path = tmp_path / "settings.json"
+    first = SettingsService(path).get().cameras[0]
+    assert first.is_phone and first.token and first.audio == "device"
+    assert SettingsService(path).get().cameras[0].token == first.token, "a restart must not break the pairing link"

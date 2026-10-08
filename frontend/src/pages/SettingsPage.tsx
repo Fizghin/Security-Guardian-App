@@ -501,7 +501,7 @@ function SystemSection() {
         <Stat label="Siren player" value={s.siren.available ? s.siren.player : 'Not available'} warn={!s.siren.available} />
         <Stat label="Face models" value={s.faces.state} warn={s.faces.state === 'error'} />
         <Stat label="Platform" value={`${s.platform} · Python ${s.python}`} />
-        <Stat label="Phone cameras" value={s.phone.enabled ? `https://${s.phone.addresses[0] ?? 'this computer'}:${s.phone.port}` : 'Turned off'} />
+        <Stat label="Phone cameras" value={!s.phone.enabled ? 'Turned off' : s.phone.public_url || `https://${s.phone.addresses[0] ?? 'this computer'}:${s.phone.port}`} />
       </div>
       <p className="hint">
         Data folder: <span className="font-mono">{s.data_dir}</span>

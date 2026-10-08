@@ -1,0 +1,18 @@
+{
+  // Runs Guardian in GitHub Codespaces (or VS Code Dev Containers). See README → "Try it in GitHub Codespaces".
+  "name": "Guardian",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
+  },
+  // The person detector and the local language model share the CPU
+  "hostRequirements": { "cpus": 4 },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/run.sh",
+  "postAttachCommand": "bash .devcontainer/run.sh",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "Guardian", "onAutoForward": "openBrowser" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "silent" }
+}

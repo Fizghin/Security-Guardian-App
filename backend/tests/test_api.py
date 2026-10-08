@@ -1,11 +1,14 @@
+import asyncio
 import time
 
 import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocket
 
 import api as api_module
+from services import phone_service
 from main import app
 
 
@@ -41,13 +44,15 @@ def test_arm_disarm_is_logged(client):
 
 
 def test_phone_camera_end_to_end(client, monkeypatch):
-    monkeypatch.setattr(api_module, "PHONE_PORT", 8443)
+    monkeypatch.setattr(api_module, "PHONES_ENABLED", True)
+    monkeypatch.setattr(phone_service, "PHONE_PORT", 8443)
+    monkeypatch.setattr(phone_service, "lan_addresses", lambda: ["192.168.1.20"])
     cam = client.post("/api/cameras", json={"name": "Back door", "source": "phone"}).json()
     assert cam["kind"] == "phone" and cam["audio"] == "device" and cam["token"]
     token, cam_id = cam["token"], cam["id"]
 
     pairing = client.get(f"/api/cameras/{cam_id}/pairing").json()
-    assert all(token in u and u.startswith("https://") for u in pairing["urls"])
+    assert pairing["urls"] == [f"https://192.168.1.20:8443/phone?k={token}"] and pairing["qr_svg"]
 
     assert client.get("/api/phone/hello", params={"k": "bad"}).status_code == 401
     assert client.get("/api/phone/hello", params={"k": token}).json()["name"] == "Back door"
@@ -152,3 +157,27 @@ def test_system_stats(client):
     s = client.get("/api/system").json()
     assert s["cpu_count"] >= 1 and s["memory_total"] > 0
     assert s["notifications"]["email"] is False and "ready_lines" in s["ai"]
+
+
+
+def test_live_video_socket_ends_when_the_dashboard_leaves():
+    # A camera with no video never sends anything. The handler must still notice the dashboard
+    # leaving, or every visit leaks a polling task and server shutdown waits for it forever.
+    # (TestClient cancels the handler on disconnect, which hides this, so drive it directly.)
+    incoming = [{"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1001}]
+
+    async def receive():
+        if incoming:
+            return incoming.pop(0)
+        await asyncio.Event().wait()
+
+    async def send(message):
+        pass
+
+    scope = {"type": "websocket", "path": "/ws/stream/none", "headers": [], "query_string": b"",
+             "client": ("test", 1), "server": ("test", 80), "subprotocols": []}
+
+    async def visit():
+        await asyncio.wait_for(api_module.ws_stream(WebSocket(scope, receive, send), "no-such-camera"), 3)
+
+    asyncio.run(visit())

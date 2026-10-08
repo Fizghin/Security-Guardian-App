@@ -77,6 +77,13 @@ export interface AIStatus {
   rejected_replies: number
 }
 
+export interface Pairing {
+  urls: string[]
+  qr_svg: string | null
+  port: number
+  public_url: string
+}
+
 export interface FaceStatus {
   state: 'idle' | 'downloading' | 'ready' | 'error'
   error: string | null
@@ -260,7 +267,7 @@ export interface SystemInfo {
   faces: FaceStatus
   ai: AIStatus
   notifications: { discord: boolean; email: boolean; email_to: string | null }
-  phone: { enabled: boolean; port: number; addresses: string[] }
+  phone: { enabled: boolean; port: number; addresses: string[]; public_url: string }
 }
 
 export class ApiError extends Error {
@@ -321,7 +328,7 @@ export const api = {
     request<CameraConfig>(cam(id), json('PATCH', body)),
   deleteCamera: (id: string) => request<{ ok: boolean }>(cam(id), { method: 'DELETE' }),
   resetPhoneLink: (id: string) => request<CameraConfig>(`${cam(id)}/reset-link`, json('POST')),
-  pairing: (id: string) => request<{ urls: string[]; qr_svg: string | null; port: number }>(`${cam(id)}/pairing`),
+  pairing: (id: string) => request<Pairing>(`${cam(id)}/pairing`),
   testSource: (source: string) =>
     request<{ ok: boolean; error?: string; width?: number; height?: number; preview?: string }>('/api/cameras/test', json('POST', { source })),
   scanCameras: () => request<{ cameras: { index: number; width: number; height: number; in_use?: boolean }[] }>('/api/cameras/scan'),

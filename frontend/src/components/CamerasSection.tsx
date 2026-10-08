@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Battery, BatteryCharging, Copy, FileVideo, Pencil, Plus, QrCode, ScanSearch, Smartphone, Trash2, Usb, Wifi } from 'lucide-react'
-import { api, type AudioOutput, type CameraConfig, type CameraStatus, type Settings, type SourceKind } from '../api'
+import { api, type AudioOutput, type CameraConfig, type CameraStatus, type Pairing, type Settings, type SourceKind } from '../api'
 import { cx } from '../lib/cx'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
@@ -64,7 +64,7 @@ function PhoneBattery({ live }: { live?: CameraStatus }) {
 export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onReset?: () => void }) {
   const notify = useToast()
   const { status } = useStatus()
-  const [pairing, setPairing] = useState<{ urls: string[]; qr_svg: string | null; port: number } | null>(null)
+  const [pairing, setPairing] = useState<Pairing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -108,6 +108,7 @@ export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onRese
 
   if (error) return <ErrorNote>{error}</ErrorNote>
   if (!pairing) return <p className="text-sm text-zinc-500">Preparing the link…</p>
+  const viaPublic = !!pairing.public_url && pairing.urls[0]?.startsWith(pairing.public_url)
   if (!pairing.urls.length) {
     return <ErrorNote>This computer has no network address a phone could reach. Connect it to Wi-Fi or a network cable.</ErrorNote>
   }
@@ -124,16 +125,23 @@ export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onRese
         </div>
       </div>
       <div className="min-w-0 space-y-3 text-sm">
-        <ol className="list-decimal space-y-1.5 pl-5 text-zinc-300">
-          <li>Connect the phone to the same Wi-Fi as this computer.</li>
-          <li>Scan the code with the phone's camera, or type the link into its browser.</li>
-          <li>
-            The browser warns that the connection is not private: this computer made its own certificate. Choose{' '}
-            <span className="text-zinc-100">Advanced → Proceed</span> (Android) or{' '}
-            <span className="text-zinc-100">Show Details → visit this website</span> (iPhone).
-          </li>
-          <li>Tap <span className="text-zinc-100">Start camera</span> and allow camera access. Keep the phone plugged in.</li>
-        </ol>
+        {viaPublic ? (
+          <ol className="list-decimal space-y-1.5 pl-5 text-zinc-300">
+            <li>Scan the code with a phone, or open the link on any device with a camera. It works from any network.</li>
+            <li>Tap <span className="text-zinc-100">Start camera</span> and allow camera access. Keep the device plugged in.</li>
+          </ol>
+        ) : (
+          <ol className="list-decimal space-y-1.5 pl-5 text-zinc-300">
+            <li>Connect the phone to the same Wi-Fi as this computer.</li>
+            <li>Scan the code with the phone's camera, or type the link into its browser.</li>
+            <li>
+              The browser warns that the connection is not private: this computer made its own certificate. Choose{' '}
+              <span className="text-zinc-100">Advanced → Proceed</span> (Android) or{' '}
+              <span className="text-zinc-100">Show Details → visit this website</span> (iPhone).
+            </li>
+            <li>Tap <span className="text-zinc-100">Start camera</span> and allow camera access. Keep the phone plugged in.</li>
+          </ol>
+        )}
         <div className="space-y-1.5">
           {pairing.urls.map((url) => (
             <div key={url} className="flex items-center gap-2">
@@ -146,7 +154,7 @@ export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onRese
         </div>
         <p className="hint">
           Old phone browser can't open the camera? Use an IP camera app instead (Add camera → Phone app). Anyone with this
-          link on your network can send video as this camera; create a new link if it leaks.
+          link{viaPublic ? '' : ' on your network'} can send video as this camera; create a new link if it leaks.
         </p>
         <Button size="sm" variant="ghost" onClick={() => setConfirmReset(true)}>
           Create new link

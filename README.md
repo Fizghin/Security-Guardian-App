@@ -45,6 +45,17 @@ On Linux without an NVIDIA GPU, `PIP_EXTRA_INDEX_URL=https://download.pytorch.or
 
 `start` checks that the local model server is running and starts `ollama serve` itself if needed.
 
+### Try it in GitHub Codespaces
+
+To try Guardian without installing anything, run it in a codespace and open it from any browser:
+
+1. On the repository page choose **Code → Codespaces → Create codespace** (or open <https://codespaces.new/Fizghin/security-guardian-app>). It uses a 4-core machine; the first start takes about 10 minutes while Python packages, the dashboard, Ollama and `llama3.2:3b` are installed.
+2. When it is ready, the terminal shows the Guardian address, a generated password and a **camera link**. Open the address (also under *Ports → Guardian*) and sign in.
+3. A codespace has no webcam, so Camera 1 is a browser camera: open the camera link in another tab on your laptop, or on a phone, and tap **Start camera**. Warnings and the siren play from that device.
+4. For a phone or another person, make the port public first: *Ports* tab → right-click port 8000 → *Port Visibility → Public*. The dashboard still needs the password and the camera page needs its secret link.
+
+Run `bash .devcontainer/run.sh` in the codespace terminal to see the address, password and camera link again; it also starts Guardian if it isn't running. A codespace stops after 30 idle minutes by default and uses your Codespaces hours while it runs.
+
 ## Local language model
 
 Guardian talks to the model over HTTP on your machine; nothing leaves it.
@@ -169,6 +180,6 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 
 ## Security
 
-By default the dashboard listens on `127.0.0.1` (this computer only) and has no password. If other devices can reach it (`HOST=0.0.0.0`, a reverse proxy or a tunnel), set `DASHBOARD_PASSWORD=` in `backend/.env`: the browser then asks for it once (any user name). Behind an https reverse proxy or tunnel, also set `PUBLIC_URL=https://your-address` so phone pairing links use that address and phones can stream from outside your Wi-Fi.
+By default the dashboard listens on `127.0.0.1` (this computer only) and has no password. If other devices can reach it (`HOST=0.0.0.0`, a reverse proxy or a tunnel), set `DASHBOARD_PASSWORD=` in `backend/.env`: browsers then get a sign-in page (scripts can use HTTP Basic auth with any user name). Behind an https reverse proxy or tunnel, also set `PUBLIC_URL=https://your-address` so phone pairing links use that address and phones can stream from outside your Wi-Fi.
 
 The phone port (8443) is reachable from your network but serves only the phone camera page. Every other path, including the dashboard, the API and the live video, returns 404 there, and sending video requires a phone's secret pairing link. Set `PHONE_PORT=0` if you don't use phone cameras.

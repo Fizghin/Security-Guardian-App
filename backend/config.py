@@ -48,6 +48,8 @@ DASHBOARD_PASSWORD = env_str("DASHBOARD_PASSWORD")
 # The https address Guardian is reachable at through a reverse proxy or tunnel, e.g.
 # https://guardian.example.com. Phone pairing links then use it first.
 PUBLIC_URL = env_str("PUBLIC_URL").rstrip("/")
+# Phones reach Guardian on the LAN port, through PUBLIC_URL, or both.
+PHONES_ENABLED = PHONE_PORT > 0 or bool(PUBLIC_URL)
 
 
 def migrate_legacy_data() -> None:

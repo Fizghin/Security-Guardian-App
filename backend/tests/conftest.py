@@ -16,6 +16,8 @@ _data_dir = Path(tempfile.mkdtemp(prefix="guardian-test-"))
 os.environ["GUARDIAN_DATA_DIR"] = str(_data_dir)
 os.environ["VIDEO_SOURCE"] = "none"
 os.environ["PHONE_PORT"] = "0"  # no HTTPS listener during tests
+os.environ["DASHBOARD_PASSWORD"] = ""  # overrides backend/.env, which load_dotenv never does
+os.environ["PUBLIC_URL"] = ""
 os.environ["AI_PROVIDER"] = "ollama"
 os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:9"
 os.environ.pop("DATABASE_URL", None)
