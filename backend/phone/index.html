@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#09090b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Guardian camera</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #09090b; color: #e4e4e7;
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 4px 0 2px; }
+  .muted { color: #a1a1aa; font-size: 13px; }
+  .card { border: 1px solid #27272a; background: #18181b; border-radius: 10px; padding: 14px; margin-top: 14px; }
+  video { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 4 / 3; object-fit: contain; display: block; }
+  button { font: inherit; border: 1px solid #3f3f46; background: #27272a; color: #f4f4f5; border-radius: 8px;
+    padding: 12px 14px; min-height: 46px; cursor: pointer; }
+  button.primary { background: #2563eb; border-color: #2563eb; width: 100%; font-weight: 600; }
+  button:disabled { opacity: .5; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .row button { flex: 1 1 30%; }
+  .status { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #71717a; flex: none; }
+  .ok .dot { background: #22c55e; } .warn .dot { background: #f59e0b; } .bad .dot { background: #ef4444; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; text-align: center; }
+  .stats div { background: #09090b; border-radius: 8px; padding: 8px 4px; }
+  .stats b { display: block; font-size: 16px; }
+  .msg { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #172554; color: #dbeafe; display: none; }
+  .error { background: #450a0a; color: #fecaca; }
+  ol { padding-left: 20px; margin: 8px 0 0; }
+  #dim { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #000; color: #3f3f46; display: none; z-index: 10;
+    align-items: center; justify-content: center; text-align: center; font-size: 13px; padding: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Guardian camera</h1>
+  <div class="muted" id="subtitle">Connecting…</div>
+
+  <div id="setup" class="card">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="row"><button id="start" class="primary" disabled>Start camera</button></div>
+    <div class="row" id="controls" style="display:none">
+      <button id="switch">Switch camera</button>
+      <button id="torch" style="display:none">Flashlight</button>
+      <button id="dimBtn">Dark screen</button>
+      <button id="pause">Pause</button>
+    </div>
+    <div id="state" class="status" style="margin-top:12px"><span class="dot"></span><span id="stateText">Not started</span></div>
+    <div class="stats">
+      <div><b id="fps">0</b><span class="muted">frames/s</span></div>
+      <div><b id="battery">–</b><span class="muted">battery</span></div>
+      <div><b id="res">–</b><span class="muted">picture</span></div>
+    </div>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <div class="card muted">
+    <b style="color:#e4e4e7">Tips for a phone used as CCTV</b>
+    <ol>
+      <li>Keep it plugged in and this page open. The screen can stay dark.</li>
+      <li>If the picture stops when the screen turns off, set the screen timeout to the longest option.</li>
+      <li>Warnings and the siren play from this phone's speaker. Turn the volume up.</li>
+    </ol>
+  </div>
+</main>
+<div id="dim">Guardian is watching.<br>Tap to show controls.</div>
+
+<script>
+(function () {
+  "use strict";
+  var token = (location.search.match(/[?&]k=([^&]+)/) || [])[1] || "";
+  var $ = function (id) { return document.getElementById(id); };
+  var video = $("video"), canvas = document.createElement("canvas");
+  var config = { fps: 8, max_width: 960, quality: 0.7 };
+  var stream = null, facing = "environment", running = false, paused = false, sending = false;
+  var torchOn = false, wakeLock = null, audioCtx = null, siren = null, battery = null;
+  var sent = [], failures = 0, lastSend = 0;
+
+  function api(method, path, body, headers, done) {
+    var xhr = new XMLHttpRequest();
+    xhr.open(method, path + (path.indexOf("?") < 0 ? "?" : "&") + "k=" + encodeURIComponent(token), true);
+    xhr.timeout = 10000;
+    for (var h in (headers || {})) xhr.setRequestHeader(h, headers[h]);
+    xhr.onload = function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      done(xhr.status, data);
+    };
+    xhr.onerror = xhr.ontimeout = function () { done(0, null); };
+    xhr.send(body || null);
+  }
+
+  function setState(kind, text) {
+    $("state").className = "status " + kind;
+    $("stateText").textContent = text;
+  }
+
+  function showMsg(text, isError) {
+    var m = $("msg");
+    m.textContent = text;
+    m.className = "msg" + (isError ? " error" : "");
+    m.style.display = text ? "block" : "none";
+  }
+
+  // ---- audio: warnings and siren on this phone -------------------------------------
+  function unlockAudio() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx && !audioCtx) audioCtx = new Ctx();
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    } catch (e) {}
+    if (window.speechSynthesis) {  // iOS only allows speech after a tap
+      var u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+  }
+
+  function speak(text, rate) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = Math.max(0.5, Math.min(2, rate || 1));
+    u.volume = 1;
+    window.speechSynthesis.speak(u);
+    showMsg("Speaking: " + text, false);
+  }
+
+  function sirenOn(seconds) {
+    if (!audioCtx || siren) return;
+    var osc = audioCtx.createOscillator(), gain = audioCtx.createGain(), t = audioCtx.currentTime;
+    osc.type = "square";
+    for (var i = 0; i < seconds; i += 2) {  // two-tone wail, 2 s per cycle
+      osc.frequency.setValueAtTime(600, t + i);
+      osc.frequency.linearRampToValueAtTime(1400, t + i + 1);
+      osc.frequency.linearRampToValueAtTime(600, t + i + 2);
+    }
+    gain.gain.value = 0.6;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(t + seconds);
+    siren = osc;
+    osc.onended = function () { if (siren === osc) siren = null; };
+    showMsg("Siren sounding", true);
+  }
+
+  function sirenOff() {
+    if (siren) { try { siren.stop(); } catch (e) {} siren = null; }
+  }
+
+  function handle(commands) {
+    (commands || []).forEach(function (c) {
+      if (c.type === "speak") speak(c.text, c.rate);
+      else if (c.type === "siren") { if (c.on) sirenOn(c.seconds || 60); else sirenOff(); }
+    });
+  }
+
+  // ---- camera ---------------------------------------------------------------------
+  function stopStream() {
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    stream = null;
+  }
+
+  function startCamera() {
+    stopStream();
+    var ideal = { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } };
+    return navigator.mediaDevices.getUserMedia({ video: ideal, audio: false }).then(function (s) {
+      stream = s;
+      video.srcObject = s;
+      var track = s.getVideoTracks()[0];
+      track.onended = function () { if (running && !paused) setTimeout(startCamera, 1000); };
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      $("torch").style.display = caps.torch ? "" : "none";
+      torchOn = false;
+      return video.play();
+    });
+  }
+
+  function requestWakeLock() {
+    if (!navigator.wakeLock || wakeLock) return;
+    navigator.wakeLock.request("screen").then(function (lock) {
+      wakeLock = lock;
+      lock.addEventListener("release", function () { wakeLock = null; });
+    }).catch(function () {});
+  }
+
+  function headers() {
+    var h = { "Content-Type": "image/jpeg" };
+    if (battery) {
+      h["X-Battery"] = String(Math.round(battery.level * 100));
+      h["X-Charging"] = battery.charging ? "1" : "0";
+    }
+    h["X-Camera"] = facing === "user" ? "front" : "back";
+    return h;
+  }
+
+  function sendFrame() {
+    if (!running || paused || sending || !video.videoWidth) return;
+    var w = video.videoWidth, h = video.videoHeight, scale = Math.min(1, config.max_width / w);
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    sending = true;
+    lastSend = Date.now();
+    canvas.toBlob(function (blob) {
+      if (!blob) { sending = false; return; }
+      api("POST", "/api/phone/frame", blob, headers(), function (status, data) {
+        sending = false;
+        if (status === 200 && data) {
+          failures = 0;
+          handle(data.commands);
+          if (data.config) config = data.config;
+          var now = Date.now();
+          sent = sent.filter(function (t) { return now - t < 3000; }).concat([now]);
+          $("fps").textContent = (sent.length / 3).toFixed(1);
+          $("res").textContent = canvas.width + "×" + canvas.height;
+          setState("ok", "Streaming to Guardian");
+        } else if (status === 401) {
+          stop("This pairing link is no longer valid. Open the new link from the Guardian dashboard.");
+        } else {
+          failures++;
+          setState("warn", "Reconnecting to Guardian…");
+        }
+      });
+    }, "image/jpeg", config.quality);
+  }
+
+  function heartbeat() {
+    var body = JSON.stringify({ state: paused ? "paused" : running ? "streaming" : "idle",
+      battery: battery ? Math.round(battery.level * 100) : null, charging: battery ? battery.charging : null });
+    api("POST", "/api/phone/heartbeat", body, { "Content-Type": "application/json" }, function (status, data) {
+      if (status === 200 && data) {
+        handle(data.commands);
+        if (data.config) config = data.config;
+      }
+    });
+  }
+
+  function loop() {
+    var interval = 1000 / Math.max(1, config.fps);
+    var backoff = failures ? Math.min(5000, 500 * failures) : 0;
+    var wait = Math.max(interval, backoff) - (Date.now() - lastSend);
+    if (running && !paused && !sending && wait <= 0) sendFrame();
+    setTimeout(loop, Math.max(10, Math.min(100, wait > 0 ? wait : 10)));
+  }
+
+  function stop(reason) {
+    running = false;
+    stopStream();
+    setState("bad", "Stopped");
+    showMsg(reason, true);
+    $("start").disabled = true;
+  }
+
+  // ---- buttons ---------------------------------------------------------------------
+  $("start").onclick = function () {
+    unlockAudio();
+    $("start").disabled = true;
+    setState("warn", "Opening camera…");
+    startCamera().then(function () {
+      running = true;
+      $("subtitle").textContent = "Watching for Guardian. Keep this page open.";
+      $("start").style.display = "none";
+      $("controls").style.display = "";
+      requestWakeLock();
+      showMsg("", false);
+    }).catch(function (err) {
+      $("start").disabled = false;
+      setState("bad", "Camera not available");
+      showMsg("Could not open the camera: " + (err && err.message ? err.message : err) +
+        ". Allow camera access for this page and try again.", true);
+    });
+  };
+  $("switch").onclick = function () {
+    facing = facing === "environment" ? "user" : "environment";
+    startCamera().catch(function () {});
+  };
+  $("torch").onclick = function () {
+    var track = stream && stream.getVideoTracks()[0];
+    if (!track) return;
+    torchOn = !torchOn;
+    track.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(function () {});
+    $("torch").textContent = torchOn ? "Flashlight off" : "Flashlight";
+  };
+  $("pause").onclick = function () {
+    paused = !paused;
+    $("pause").textContent = paused ? "Resume" : "Pause";
+    setState(paused ? "warn" : "ok", paused ? "Paused: Guardian sees nothing" : "Streaming to Guardian");
+    heartbeat();
+  };
+  $("dimBtn").onclick = function () { $("dim").style.display = "flex"; };
+  $("dim").onclick = function () { $("dim").style.display = "none"; };
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && running) {
+      requestWakeLock();
+      var track = stream && stream.getVideoTracks()[0];
+      if (!track || track.readyState === "ended") startCamera().catch(function () {});
+    }
+  });
+
+  // ---- start up ---------------------------------------------------------------------
+  if (navigator.getBattery) {
+    navigator.getBattery().then(function (b) {
+      battery = b;
+      var show = function () { $("battery").textContent = Math.round(b.level * 100) + "%" + (b.charging ? " ⚡" : ""); };
+      show();
+      b.addEventListener("levelchange", show);
+      b.addEventListener("chargingchange", show);
+    }).catch(function () {});
+  }
+
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $("subtitle").textContent = "Camera access is blocked";
+    showMsg("This browser only allows the camera on a secure (https) page. Open the https:// link shown in " +
+      "the Guardian dashboard. If this phone's browser is too old, install an IP camera app instead " +
+      "(Guardian → Settings → Cameras → Phone app).", true);
+    setState("bad", "Camera not available");
+    return;
+  }
+
+  api("GET", "/api/phone/hello", null, {}, function (status, data) {
+    if (status === 200 && data) {
+      $("title").textContent = data.name;
+      $("subtitle").textContent = "Paired with Guardian. Tap Start camera.";
+      if (data.config) config = data.config;
+      $("start").disabled = false;
+      setInterval(heartbeat, 2000);
+      loop();
+    } else if (status === 401) {
+      $("subtitle").textContent = "Link not valid";
+      showMsg("This pairing link is not valid any more. In the Guardian dashboard open Settings → Cameras and " +
+        "scan the code for this phone again.", true);
+    } else {
+      $("subtitle").textContent = "Cannot reach Guardian";
+      showMsg("Check that this phone is on the same Wi-Fi as the computer running Guardian, then reload.", true);
+    }
+  });
+})();
+</script>
+</body>
+</html>

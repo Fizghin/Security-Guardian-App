@@ -1,14 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Download, Maximize2, VideoOff } from 'lucide-react'
-import { api } from '../api'
+import { Battery, BatteryCharging, Camera, Download, Maximize2, Smartphone, VideoOff } from 'lucide-react'
+import { api, type CameraStatus } from '../api'
 import { cx } from '../lib/cx'
+import { LEVELS } from '../lib/format'
 import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
 
 const STALE_MS = 3000
 const CAPTION_SECONDS = 12
 
-export default function LiveVideo({ cameraName }: { cameraName: string }) {
+export default function LiveVideo({
+  camera,
+  compact = false,
+  selected = false,
+  onSelect,
+}: {
+  camera: CameraStatus
+  compact?: boolean
+  selected?: boolean
+  onSelect?: () => void
+}) {
   const { status } = useStatus()
   const imgRef = useRef<HTMLImageElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -25,7 +36,7 @@ export default function LiveVideo({ cameraName }: { cameraName: string }) {
     let closed = false
 
     const connect = () => {
-      ws = new WebSocket(api.streamUrl())
+      ws = new WebSocket(api.streamUrl(camera.id))
       ws.binaryType = 'blob'
       ws.onopen = () => {
         delay = 1000
@@ -59,20 +70,21 @@ export default function LiveVideo({ cameraName }: { cameraName: string }) {
       ws?.close()
       if (url) URL.revokeObjectURL(url)
     }
-  }, [])
+  }, [camera.id])
 
-  const cam = status?.camera
-  const showFrame = hasFrame && !stale
+  const showFrame = hasFrame && !stale && camera.connected
+  const level = camera.threat_level
   const caption =
-    status?.last_message && status.last_message_time && status.server_time - status.last_message_time < CAPTION_SECONDS
-      ? status.last_message
+    !compact && camera.last_message && camera.last_message_time && status && status.server_time - camera.last_message_time < CAPTION_SECONDS
+      ? camera.last_message
       : null
+  const phone = camera.kind === 'phone' ? camera.phone : undefined
 
   let problem: { title: string; detail: string } | null = null
-  if (cam && !cam.connected) {
+  if (!camera.connected) {
     problem = {
-      title: cam.kind === 'none' ? 'Camera disabled' : 'No camera signal',
-      detail: cam.error ?? 'Waiting for the camera…',
+      title: camera.kind === 'none' ? 'Camera disabled' : camera.kind === 'phone' ? 'Phone not streaming' : 'No camera signal',
+      detail: camera.error ?? 'Waiting for the camera…',
     }
   } else if (!socketOpen) {
     problem = { title: 'Connecting to video…', detail: 'The dashboard is reconnecting to the server.' }
@@ -81,50 +93,67 @@ export default function LiveVideo({ cameraName }: { cameraName: string }) {
   }
 
   return (
-    <div ref={boxRef} className="relative aspect-video w-full overflow-hidden rounded-lg border border-zinc-800 bg-black">
-      <img ref={imgRef} alt="Live camera" className={cx('h-full w-full object-contain', !showFrame && 'opacity-30')} />
+    <div
+      ref={boxRef}
+      onClick={onSelect}
+      className={cx(
+        'relative aspect-video w-full overflow-hidden rounded-lg border bg-black',
+        level >= 3 ? 'border-red-600' : selected ? 'border-blue-500' : 'border-zinc-800',
+        onSelect && 'cursor-pointer',
+      )}
+    >
+      <img
+        ref={imgRef}
+        alt={`${camera.name} live`}
+        className={cx('h-full w-full object-contain', !hasFrame && 'invisible', hasFrame && !showFrame && 'opacity-30')}
+      />
 
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 py-2 text-xs">
-        <div className="flex items-center gap-2 font-medium">
-          <span className={cx('h-2 w-2 rounded-full', showFrame && cam?.connected ? 'bg-red-500' : 'bg-zinc-500')} />
-          {cameraName}
-          {showFrame && cam?.connected && <span className="text-zinc-400">Live</span>}
-          {status?.recording.active && (
-            <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">REC</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {cam?.connected && (
-            <span className="mr-1 tabular-nums text-zinc-300">
-              {cam.width}×{cam.height} · {status?.pipeline.fps ?? 0} fps
+      <div className={cx('absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent', compact ? 'px-2 py-1.5 text-[11px]' : 'px-3 py-2 text-xs')}>
+        <div className="flex min-w-0 items-center gap-2 font-medium">
+          <span className={cx('h-2 w-2 shrink-0 rounded-full', showFrame ? 'bg-red-500' : 'bg-zinc-500')} />
+          {phone && <Smartphone className="h-3.5 w-3.5 shrink-0 text-zinc-300" />}
+          <span className="truncate">{camera.name}</span>
+          {level > 0 && (
+            <span className={cx('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold text-white', LEVELS[level].bg)}>
+              {compact ? `L${level}` : `Level ${level}`}
             </span>
           )}
-          <a
-            href={api.snapshotUrl()}
-            download="guardian-snapshot.jpg"
-            className="rounded p-1.5 text-zinc-200 hover:bg-white/10"
-            title="Save snapshot"
-          >
-            <Download className="h-4 w-4" />
-          </a>
-          <button
-            type="button"
-            className="rounded p-1.5 text-zinc-200 hover:bg-white/10"
-            title="Full screen"
-            onClick={() => boxRef.current?.requestFullscreen?.()}
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
+          {camera.recording.active && (
+            <span className="shrink-0 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white">REC</span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {phone?.battery != null && (
+            <span className={cx('mr-1 flex items-center gap-0.5 tabular-nums', phone.battery <= 20 && !phone.charging ? 'text-amber-400' : 'text-zinc-300')}>
+              {phone.charging ? <BatteryCharging className="h-3.5 w-3.5" /> : <Battery className="h-3.5 w-3.5" />}
+              {phone.battery}%
+            </span>
+          )}
+          {!compact && camera.connected && (
+            <span className="mr-1 hidden tabular-nums text-zinc-300 sm:inline">
+              {camera.width}×{camera.height} · {camera.pipeline.fps} fps
+            </span>
+          )}
+          {!compact && (
+            <>
+              <a href={api.snapshotUrl(camera.id)} download={`${camera.id}-snapshot.jpg`} className="rounded p-1.5 text-zinc-200 hover:bg-white/10" title="Save snapshot">
+                <Download className="h-4 w-4" />
+              </a>
+              <button type="button" className="rounded p-1.5 text-zinc-200 hover:bg-white/10" title="Full screen" onClick={() => boxRef.current?.requestFullscreen?.()}>
+                <Maximize2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
       {problem && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center">
-          {cam && !cam.connected ? <VideoOff className="h-8 w-8 text-zinc-500" /> : <Camera className="h-8 w-8 text-zinc-500" />}
-          <p className="font-medium text-zinc-200">{problem.title}</p>
-          <p className="max-w-md text-xs text-zinc-400">{problem.detail}</p>
-          {cam && !cam.connected && (
-            <a href={href('settings', 'camera')} className="mt-1 text-xs font-medium text-blue-400 hover:text-blue-300">
+        <div className={cx('absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center', compact ? 'p-3' : 'p-6')}>
+          {!camera.connected ? <VideoOff className={cx('text-zinc-500', compact ? 'h-5 w-5' : 'h-8 w-8')} /> : <Camera className={cx('text-zinc-500', compact ? 'h-5 w-5' : 'h-8 w-8')} />}
+          <p className={cx('font-medium text-zinc-200', compact && 'text-xs')}>{problem.title}</p>
+          {!compact && <p className="max-w-md text-xs text-zinc-400">{problem.detail}</p>}
+          {!compact && !camera.connected && (
+            <a href={href('settings', 'cameras')} className="mt-1 text-xs font-medium text-blue-400 hover:text-blue-300">
               Camera settings
             </a>
           )}

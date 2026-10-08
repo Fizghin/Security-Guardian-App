@@ -14,6 +14,7 @@ class DetectionService:
         self.model_path = model_path
         self._model = None
         self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self.error: str | None = None
         self.device: str | None = None
         self.inference_ms: float | None = None
@@ -48,9 +49,11 @@ class DetectionService:
     def detect_persons(self, frame, confidence: float = 0.5, min_height_pct: int = 10) -> List[Detection]:
         if not self.load():
             return []
-        started = time.perf_counter()
-        results = self._model(frame, classes=[0], conf=confidence, imgsz=640, verbose=False)
-        self.inference_ms = round((time.perf_counter() - started) * 1000, 1)
+        # One model is shared by every camera; YOLO models are not safe to call concurrently.
+        with self._infer_lock:
+            started = time.perf_counter()
+            results = self._model(frame, classes=[0], conf=confidence, imgsz=640, verbose=False)
+            self.inference_ms = round((time.perf_counter() - started) * 1000, 1)
 
         frame_h = frame.shape[0]
         min_h = frame_h * min_height_pct / 100.0

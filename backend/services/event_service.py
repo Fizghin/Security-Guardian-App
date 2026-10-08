@@ -24,9 +24,10 @@ class EventService:
     def __init__(self):
         self._lock = threading.Lock()
 
-    def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None) -> None:
+    def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
+            camera: str | None = None) -> None:
         severity = severity.upper() if severity.upper() in SEVERITIES else "INFO"
-        print(f"[event] {severity:<8} {event_type}: {description}")
+        print(f"[event] {severity:<8} {event_type}{f' [{camera}]' if camera else ''}: {description}")
         with self._lock:
             db = SessionLocal()
             try:
@@ -36,6 +37,7 @@ class EventService:
                     description=description,
                     severity=severity,
                     recording=recording,
+                    camera=camera,
                 ))
                 db.commit()
             except Exception as exc:
@@ -44,8 +46,10 @@ class EventService:
             finally:
                 db.close()
 
-    def _filtered(self, db, event_type=None, severity=None, since=None, until=None, search=None):
+    def _filtered(self, db, event_type=None, severity=None, since=None, until=None, search=None, camera=None):
         q = db.query(SecurityEvent)
+        if camera:
+            q = q.filter(SecurityEvent.camera == camera)
         if event_type:
             q = q.filter(SecurityEvent.event_type == event_type)
         if severity:
@@ -90,6 +94,7 @@ class EventService:
             rows = db.query(SecurityEvent.timestamp, SecurityEvent.event_type, SecurityEvent.severity) \
                 .filter(SecurityEvent.timestamp >= since).all()
             all_types = [r[0] for r in db.query(SecurityEvent.event_type).distinct().all() if r[0]]
+            all_cameras = [r[0] for r in db.query(SecurityEvent.camera).distinct().all() if r[0]]
         finally:
             db.close()
 
@@ -115,6 +120,7 @@ class EventService:
             "by_type": dict(by_type.most_common()),
             "by_severity": {s: by_severity.get(s, 0) for s in SEVERITIES},
             "types": sorted(all_types),
+            "cameras": sorted(all_cameras),
         }
 
     def export_csv(self, **filters) -> str:
@@ -123,9 +129,10 @@ class EventService:
             rows = self._filtered(db, **filters).order_by(SecurityEvent.timestamp.desc()).all()
             buf = io.StringIO()
             writer = csv.writer(buf)
-            writer.writerow(["id", "timestamp_utc", "type", "severity", "description", "recording"])
+            writer.writerow(["id", "timestamp_utc", "camera", "type", "severity", "description", "recording"])
             for r in rows:
-                writer.writerow([r.id, to_iso(r.timestamp), r.event_type, r.severity, r.description, r.recording or ""])
+                writer.writerow([r.id, to_iso(r.timestamp), r.camera or "", r.event_type, r.severity, r.description,
+                                 r.recording or ""])
             return buf.getvalue()
         finally:
             db.close()

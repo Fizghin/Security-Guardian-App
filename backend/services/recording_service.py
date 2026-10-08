@@ -1,7 +1,7 @@
 """
-Incident recording.
+Incident recording, one Recorder per camera plus a shared RecordingLibrary.
 
-A sampler thread takes the latest annotated frame at a fixed rate. While idle
+A sampler thread takes the camera's latest annotated frame at a fixed rate. While idle
 it keeps a short pre-roll buffer; when recording it writes frames to an H.264
 MP4 through FFmpeg (system install, or the binary bundled with imageio-ffmpeg).
 If no FFmpeg is available, OpenCV's MPEG-4 writer is used instead; those clips
@@ -78,10 +78,96 @@ class _OpenCVWriter:
         return True
 
 
-class RecordingService:
+class RecordingLibrary:
+    """Clips on disk, shared by all cameras."""
+
     def __init__(self, directory: Path = RECORDINGS_DIR):
         self.dir = directory
         self.ffmpeg = find_ffmpeg()
+        self.in_progress: set[str] = set()
+        if not self.ffmpeg:
+            print("[rec] FFmpeg not found; clips will use OpenCV's MPEG-4 encoder")
+
+    @property
+    def encoder(self) -> str:
+        return "ffmpeg (h264)" if self.ffmpeg else "opencv (mpeg-4)"
+
+    def list(self, camera_id: str | None = None) -> list[dict]:
+        out = []
+        for f in self.dir.glob("*.mp4"):
+            if f.name.endswith(".part.mp4"):
+                continue
+            meta_file = f.with_suffix(".json")
+            meta = {}
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    meta = {}
+            if camera_id and meta.get("camera_id") != camera_id:
+                continue
+            stat = f.stat()
+            out.append({
+                "file": f.name,
+                "size": stat.st_size,
+                "started": meta.get("started") or datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+                "duration": meta.get("duration"),
+                "reason": meta.get("reason", "unknown"),
+                "max_level": meta.get("max_level"),
+                "playable": meta.get("playable", True),
+                "camera_id": meta.get("camera_id"),
+                "camera": meta.get("camera"),
+                "thumbnail": f.with_suffix(".jpg").exists(),
+            })
+        out.sort(key=lambda r: r["started"], reverse=True)
+        return out
+
+    def path(self, name: str, suffix: str = ".mp4") -> Path:
+        clean = Path(name).name
+        if not clean.endswith(".mp4") or clean.endswith(".part.mp4"):
+            raise FileNotFoundError(name)
+        path = self.dir / (Path(clean).stem + suffix)
+        if not path.is_file():
+            raise FileNotFoundError(name)
+        return path
+
+    def delete(self, name: str) -> None:
+        if Path(name).name in self.in_progress:
+            raise PermissionError("Recording is still in progress")
+        video = self.path(name)
+        for suffix in (".mp4", ".jpg", ".json"):
+            video.with_suffix(suffix).unlink(missing_ok=True)
+
+    def prune(self, retention_days: int) -> int:
+        removed = 0
+        if retention_days > 0:
+            cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
+            for f in self.dir.glob("*.mp4"):
+                if not f.name.endswith(".part.mp4") and f.stat().st_mtime < cutoff:
+                    for suffix in (".mp4", ".jpg", ".json"):
+                        f.with_suffix(suffix).unlink(missing_ok=True)
+                    removed += 1
+        # Leftovers from a crash mid-recording.
+        for f in self.dir.glob("*.part.mp4"):
+            if f.name.replace(".part.mp4", ".mp4") not in self.in_progress:
+                f.unlink(missing_ok=True)
+        return removed
+
+    def usage_bytes(self) -> int:
+        return sum(f.stat().st_size for f in self.dir.iterdir() if f.is_file())
+
+
+recording_library = RecordingLibrary()
+
+
+class Recorder:
+    """Records one camera. `source` returns that camera's latest annotated frame."""
+
+    def __init__(self, camera_id: str, camera_name: Callable[[], str], library: RecordingLibrary = recording_library):
+        self.camera_id = camera_id
+        self.camera_name = camera_name
+        self.library = library
+        self.dir = library.dir
         self._lock = threading.RLock()
         self._source: Callable[[], object] | None = None
         self._thread: threading.Thread | None = None
@@ -95,8 +181,6 @@ class RecordingService:
         self.max_clip_seconds = 300
         self.on_finished: Callable[[dict], None] | None = None
         self._no_frames_logged = 0.0
-        if not self.ffmpeg:
-            print("[rec] FFmpeg not found; clips will use OpenCV's MPEG-4 encoder")
 
     # ---- configuration -------------------------------------------------
     def configure(self, preroll_seconds: int, postroll_seconds: int, max_clip_seconds: int) -> None:
@@ -111,7 +195,7 @@ class RecordingService:
         if self._thread and self._thread.is_alive():
             return
         self._running.set()
-        self._thread = threading.Thread(target=self._sample_loop, daemon=True, name="recorder")
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True, name=f"recorder:{self.camera_id}")
         self._thread.start()
 
     def shutdown(self) -> None:
@@ -137,30 +221,32 @@ class RecordingService:
             if frame is None and not self._preroll:
                 if time.time() - self._no_frames_logged > 30:
                     self._no_frames_logged = time.time()
-                    print("[rec] Cannot record: no video frames available")
+                    print(f"[rec:{self.camera_id}] Cannot record: no video frames available")
                 return None
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            name = f"{stamp}_{reason}.mp4"
-            part = self.dir / f"{stamp}_{reason}.part.mp4"
+            stem = f"{stamp}_{self.camera_id}_{reason}"
+            name = f"{stem}.mp4"
+            part = self.dir / f"{stem}.part.mp4"
             first = frame if frame is not None else self._preroll[-1]
             self._size = self._writer_size(first)
             try:
-                self._writer = (_FFmpegWriter(self.ffmpeg, part, self._size) if self.ffmpeg
-                                else _OpenCVWriter(part, self._size))
+                ffmpeg = self.library.ffmpeg
+                self._writer = _FFmpegWriter(ffmpeg, part, self._size) if ffmpeg else _OpenCVWriter(part, self._size)
             except Exception as exc:
-                print(f"[rec] Could not start writer: {exc}")
+                print(f"[rec:{self.camera_id}] Could not start writer: {exc}")
                 return None
-            cv2.imwrite(str(self.dir / f"{Path(name).stem}.jpg"), self._fit(first), [cv2.IMWRITE_JPEG_QUALITY, 85])
+            cv2.imwrite(str(self.dir / f"{stem}.jpg"), self._fit(first), [cv2.IMWRITE_JPEG_QUALITY, 85])
             preroll = list(self._preroll)
             self._preroll.clear()
             self.current = {"file": name, "part": part, "reason": reason, "max_level": level,
                             "started": time.time() - len(preroll) / FPS, "frames": 0}
+            self.library.in_progress.add(name)
             self._stop_at = None
             for f in preroll:
                 self._write(f)
             if not self.current:  # writer died while flushing the pre-roll
                 return None
-            print(f"[rec] Recording {name} ({len(preroll)} pre-roll frames)")
+            print(f"[rec:{self.camera_id}] Recording {name} ({len(preroll)} pre-roll frames)")
             return name
 
     def note_level(self, level: int) -> None:
@@ -196,7 +282,7 @@ class RecordingService:
             self._writer.write(self._fit(frame))
             self.current["frames"] += 1
         except Exception as exc:
-            print(f"[rec] Write failed: {exc}")
+            print(f"[rec:{self.camera_id}] Write failed: {exc}")
             self._finalize()
 
     def _finalize(self) -> None:
@@ -205,11 +291,12 @@ class RecordingService:
         cur, writer = self.current, self._writer
         self.current, self._writer, self._stop_at = None, None, None
         ok = writer.close() if writer else False
+        self.library.in_progress.discard(cur["file"])
         final = self.dir / cur["file"]
         if not ok or not cur["part"].exists() or cur["frames"] == 0:
             cur["part"].unlink(missing_ok=True)
             (self.dir / f"{final.stem}.jpg").unlink(missing_ok=True)
-            print(f"[rec] Discarded {cur['file']}")
+            print(f"[rec:{self.camera_id}] Discarded {cur['file']}")
             return
         cur["part"].replace(final)
         meta = {
@@ -219,9 +306,11 @@ class RecordingService:
             "max_level": cur["max_level"],
             "codec": writer.codec,
             "playable": writer.playable,
+            "camera_id": self.camera_id,
+            "camera": self.camera_name(),
         }
         (self.dir / f"{final.stem}.json").write_text(json.dumps(meta), encoding="utf-8")
-        print(f"[rec] Saved {final.name} ({meta['duration']}s)")
+        print(f"[rec:{self.camera_id}] Saved {final.name} ({meta['duration']}s)")
         if self.on_finished:
             info = {**meta, "file": final.name, "path": str(final)}
             threading.Thread(target=self.on_finished, args=(info,), daemon=True).start()
@@ -236,6 +325,8 @@ class RecordingService:
                         self._write(frame)
                     else:
                         self._preroll.append(frame)
+                elif not self.current:
+                    self._preroll.clear()  # camera went away; old frames are no longer "just before"
                 if self.current:
                     now = time.time()
                     if self._stop_at and now >= self._stop_at:
@@ -252,68 +343,6 @@ class RecordingService:
             elif delay > 0:
                 time.sleep(delay)
 
-    # ---- library ---------------------------------------------------------
-    def list(self) -> list[dict]:
-        out = []
-        for f in self.dir.glob("*.mp4"):
-            if f.name.endswith(".part.mp4"):
-                continue
-            meta_file = f.with_suffix(".json")
-            meta = {}
-            if meta_file.exists():
-                try:
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    meta = {}
-            stat = f.stat()
-            out.append({
-                "file": f.name,
-                "size": stat.st_size,
-                "started": meta.get("started") or datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
-                "duration": meta.get("duration"),
-                "reason": meta.get("reason", "unknown"),
-                "max_level": meta.get("max_level"),
-                "playable": meta.get("playable", True),
-                "thumbnail": f.with_suffix(".jpg").exists(),
-            })
-        out.sort(key=lambda r: r["started"], reverse=True)
-        return out
-
-    def path(self, name: str, suffix: str = ".mp4") -> Path:
-        clean = Path(name).name
-        if not clean.endswith(".mp4") or clean.endswith(".part.mp4"):
-            raise FileNotFoundError(name)
-        path = self.dir / (Path(clean).stem + suffix)
-        if not path.is_file():
-            raise FileNotFoundError(name)
-        return path
-
-    def delete(self, name: str) -> None:
-        if self.current and self.current["file"] == Path(name).name:
-            raise PermissionError("Recording is still in progress")
-        video = self.path(name)
-        for suffix in (".mp4", ".jpg", ".json"):
-            video.with_suffix(suffix).unlink(missing_ok=True)
-
-    def prune(self, retention_days: int) -> int:
-        if retention_days <= 0:
-            return 0
-        cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
-        removed = 0
-        for f in self.dir.glob("*.mp4"):
-            if not f.name.endswith(".part.mp4") and f.stat().st_mtime < cutoff:
-                for suffix in (".mp4", ".jpg", ".json"):
-                    f.with_suffix(suffix).unlink(missing_ok=True)
-                removed += 1
-        # Leftovers from a crash mid-recording.
-        for f in self.dir.glob("*.part.mp4"):
-            if not self.current or f != self.current["part"]:
-                f.unlink(missing_ok=True)
-        return removed
-
-    def usage_bytes(self) -> int:
-        return sum(f.stat().st_size for f in self.dir.iterdir() if f.is_file())
-
     def status(self) -> dict:
         cur = self.current
         return {
@@ -321,8 +350,4 @@ class RecordingService:
             "file": cur["file"] if cur else None,
             "started": cur["started"] if cur else None,
             "stopping": self._stop_at is not None,
-            "encoder": "ffmpeg (h264)" if self.ffmpeg else "opencv (mpeg-4)",
         }
-
-
-recording_service = RecordingService()

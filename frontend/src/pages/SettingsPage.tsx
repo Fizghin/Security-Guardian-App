@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { RefreshCw, ScanSearch, Send, Sparkles } from 'lucide-react'
+import { RefreshCw, Send, Sparkles } from 'lucide-react'
 import { api, type AITestResult, type Settings, type SettingsPatch } from '../api'
-import { Badge, Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
+import CamerasSection from '../components/CamerasSection'
+import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
 import { formatBytes, formatUptime } from '../lib/format'
 import { useStatus } from '../lib/status'
@@ -99,70 +100,6 @@ function LevelSelect({ value, onChange }: { value: number; onChange: (v: number)
   )
 }
 
-// ---- Camera ------------------------------------------------------------------------
-function CameraSection({ value, save }: { value: Settings['camera']; save: Save }) {
-  const { status } = useStatus()
-  const notify = useToast()
-  const d = useDraft(value)
-  const [scanning, setScanning] = useState(false)
-  const [found, setFound] = useState<{ index: number; width: number; height: number; in_use?: boolean }[] | null>(null)
-  const cam = status?.camera
-
-  const scan = async () => {
-    setScanning(true)
-    try {
-      setFound((await api.scanCameras()).cameras)
-    } catch (err) {
-      notify(errorMessage(err), 'error')
-    } finally {
-      setScanning(false)
-    }
-  }
-
-  return (
-    <Section id="camera" title="Camera" dirty={d.dirty} onReset={d.reset} onSave={() => save({ camera: d.changes })}>
-      <div className="flex items-center gap-2 rounded-md bg-zinc-950/60 px-3 py-2 text-sm">
-        <Dot className={cam?.connected ? 'bg-emerald-500' : 'bg-red-500'} />
-        {cam?.connected ? (
-          <span>
-            Connected to <span className="font-mono text-xs">{cam.kind === 'index' || cam.kind === 'auto' ? `camera ${cam.active_index}` : cam.source}</span>
-            <span className="text-zinc-500">
-              {' '}
-              · {cam.width}×{cam.height} · {cam.fps} fps
-            </span>
-          </span>
-        ) : (
-          <span className="text-zinc-300">{cam?.error ?? 'Not connected'}</span>
-        )}
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Name" hint="Shown on the video and in recordings">
-          <input className="input" value={d.draft.name} maxLength={40} onChange={(e) => d.set('name', e.target.value)} />
-        </Field>
-        <Field label="Source" hint="auto, a camera number (0, 1…), an RTSP/HTTP stream URL, a video file path, or none">
-          <input className="input font-mono" value={d.draft.source} onChange={(e) => d.set('source', e.target.value)} placeholder="auto" />
-        </Field>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" icon={<ScanSearch className="h-4 w-4" />} loading={scanning} onClick={scan}>
-          Find local cameras
-        </Button>
-        {found?.length === 0 && <span className="text-xs text-zinc-500">No local cameras found.</span>}
-        {found?.map((c) => (
-          <Button key={c.index} size="sm" variant="ghost" onClick={() => d.set('source', String(c.index))}>
-            Camera {c.index} · {c.width}×{c.height}
-            {c.in_use && <Badge>in use</Badge>}
-          </Button>
-        ))}
-      </div>
-      <p className="hint">
-        Phone as a camera: DroidCam shows a URL such as <span className="font-mono">http://192.168.1.20:4747/video</span>. IP
-        cameras usually offer <span className="font-mono">rtsp://user:pass@address/stream</span>.
-      </p>
-    </Section>
-  )
-}
-
 // ---- Language model -------------------------------------------------------------------
 const modelFields = (ai: Settings['ai']) => ({
   provider: ai.provider,
@@ -177,6 +114,8 @@ const voiceFields = (ai: Settings['ai']) => ({
   intimidation: ai.intimidation,
   humor: ai.humor,
   persistence: ai.persistence,
+  greet_insiders: ai.greet_insiders,
+  greet_cooldown_minutes: ai.greet_cooldown_minutes,
 })
 
 function ModelSection({ value, save }: { value: Settings['ai']; save: Save }) {
@@ -363,6 +302,17 @@ function VoiceSection({ value, save, voice }: { value: Settings['ai']; save: Sav
       <p className="text-sm text-zinc-400">
         Tone: <span className="text-zinc-200">{toneText(d.draft.intimidation, d.draft.humor)}</span>
       </p>
+      <div className="border-t border-zinc-800 pt-4">
+        <Toggle
+          checked={d.draft.greet_insiders}
+          onChange={(v) => d.set('greet_insiders', v)}
+          label="Greet recognised people by name"
+          description="e.g. “Welcome back, Sam.” Needs insiders with photos and face recognition turned on."
+        />
+      </div>
+      {d.draft.greet_insiders && (
+        <Slider label="Greet the same person at most every" value={d.draft.greet_cooldown_minutes} min={1} max={720} step={1} format={(v) => (v >= 60 ? `${(v / 60).toFixed(v % 60 ? 1 : 0)} h` : `${v} min`)} onChange={(v) => d.set('greet_cooldown_minutes', v)} />
+      )}
     </Section>
   )
 }
@@ -383,6 +333,7 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
       {d.draft.face_recognition && (
         <div className="grid gap-5 sm:grid-cols-2">
           <Slider label="Face match strictness" value={d.draft.face_match_threshold} min={0.2} max={0.8} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => d.set('face_match_threshold', v)} hint="Higher is stricter. 0.36 suits most cameras." />
+          <Slider label="Time to identify someone" value={d.draft.identify_seconds} min={0} max={10} step={0.5} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => d.set('identify_seconds', v)} hint="A new person counts as a stranger after this long without a matching face. Strangers whose face is clearly seen are flagged sooner." />
           <Slider label="Trust after recognition" value={d.draft.insider_grace_seconds} min={0} max={300} step={5} format={(v) => `${v} s`} onChange={(v) => d.set('insider_grace_seconds', v)} hint="Keeps trusting an insider who turns away from the camera" />
         </div>
       )}
@@ -442,6 +393,11 @@ function EscalationSection({ value, save, sirenAvailable }: { value: Settings['e
           </Field>
         </div>
       )}
+      <div className="border-t border-zinc-800 pt-4">
+        <Field label="Alert when a camera goes offline after" hint="While armed. Catches unplugged, covered or dead-battery cameras. 0 turns it off.">
+          <NumberInput value={d.draft.offline_alert_seconds} min={0} max={3600} suffix="sec" onChange={(v) => d.set('offline_alert_seconds', v)} />
+        </Field>
+      </div>
     </Section>
   )
 }
@@ -538,12 +494,13 @@ function SystemSection() {
         <Stat label="Uptime" value={formatUptime(s.uptime_seconds)} />
         <Stat label="Person detector" value={s.detector.loaded ? `${s.detector.model} on ${s.detector.device}` : s.detector.error ?? 'Loads with the first frame'} warn={!!s.detector.error} />
         <Stat label="Detection time" value={s.detector.inference_ms != null ? `${s.detector.inference_ms} ms` : '–'} />
-        <Stat label="Processing" value={`${s.pipeline.fps} fps`} />
+        <Stat label="Voice lines ready" value={`${s.ai.ready_lines} prepared · ${s.ai.rejected_replies} rejected`} />
         <Stat label="Recordings" value={`${formatBytes(s.recordings_bytes)} · ${s.recording_encoder}`} />
         <Stat label="Speech" value={s.voice.available ? s.voice.engine : s.voice.available === false ? 'Not available' : 'Checking…'} warn={s.voice.available === false} />
         <Stat label="Siren player" value={s.siren.available ? s.siren.player : 'Not available'} warn={!s.siren.available} />
         <Stat label="Face models" value={s.faces.state} warn={s.faces.state === 'error'} />
         <Stat label="Platform" value={`${s.platform} · Python ${s.python}`} />
+        <Stat label="Phone cameras" value={s.phone.enabled ? `https://${s.phone.addresses[0] ?? 'this computer'}:${s.phone.port}` : 'Turned off'} />
       </div>
       <p className="hint">
         Data folder: <span className="font-mono">{s.data_dir}</span>
@@ -554,7 +511,7 @@ function SystemSection() {
 
 // ---- Page ------------------------------------------------------------------------------------
 const SECTIONS = [
-  ['camera', 'Camera'],
+  ['cameras', 'Cameras'],
   ['ai', 'Language model'],
   ['voice', 'Voice'],
   ['detection', 'Detection'],
@@ -610,7 +567,7 @@ export default function SettingsPage({ section }: { section: string }) {
         </ul>
       </nav>
       <div className="min-w-0 space-y-4">
-        <CameraSection key={k(settings.camera)} value={settings.camera} save={save} />
+        <CamerasSection key={k(settings.phone)} phoneSettings={settings.phone} savePhone={(phone) => save({ phone })} />
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />

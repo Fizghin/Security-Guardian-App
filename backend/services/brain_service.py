@@ -1,5 +1,5 @@
 """
-Threat escalation.
+Threat escalation for one camera.
 
   0 Clear       nobody unrecognised in view
   1 Detected    unrecognised person appears          -> voice greeting
@@ -7,22 +7,22 @@ Threat escalation.
   3 Intruder    still there after level3_after secs  -> owner alerted
   4 Alarm       still there after level4_after secs  -> siren
 
+People the tracker is still identifying ("pending") do not start an incident,
+so a resident walking up to the camera is recognised before anything is said.
 An incident ends when nobody unrecognised has been seen for clear_after
-seconds, when the system is disarmed, or when the alarm is reset from the
-dashboard. A manual panic stays at level 4 until it is reset.
+seconds, when the system is disarmed, or when the alarm is reset. A panic is
+driven by the CameraManager and stays at level 4 until it is reset.
 """
 import threading
 import time
 from typing import Callable, List
 
+from data.fallback_messages import greeting
 from models.domain import Detection
-from services.ai_service import ai_service
+from services.ai_service import WarningContext, ai_service
 from services.event_service import event_service
 from services.notification_service import notification_service
-from services.recording_service import recording_service
 from services.settings_service import settings_service
-from services.siren_service import siren_service
-from services.tts_service import tts_service
 
 LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
 SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
@@ -36,12 +36,14 @@ def voice_cooldown(persistence: int) -> float:
     return 40.0 - 0.32 * persistence
 
 
-class BrainService:
-    def __init__(self, settings=settings_service, ai=ai_service, tts=tts_service, siren=siren_service,
-                 recorder=recording_service, notifier=notification_service, events=event_service,
-                 clock: Callable[[], float] = time.time):
-        self.settings, self.ai, self.tts, self.siren = settings, ai, tts, siren
-        self.recorder, self.notifier, self.events, self.clock = recorder, notifier, events, clock
+class CameraBrain:
+    def __init__(self, camera_id: str, camera_name: Callable[[], str], speaker, recorder,
+                 settings=settings_service, ai=ai_service, notifier=notification_service, events=event_service,
+                 prune: Callable[[int], int] = lambda days: 0, clock: Callable[[], float] = time.time):
+        self.camera_id, self.camera_name = camera_id, camera_name
+        self.speaker, self.recorder = speaker, recorder
+        self.settings, self.ai, self.notifier, self.events = settings, ai, notifier, events
+        self.prune, self.clock = prune, clock
         self.snapshot: Callable[[], bytes | None] = lambda: None
         self._lock = threading.RLock()
 
@@ -54,14 +56,17 @@ class BrainService:
         self._peak = 0
         self._spoken_level = 0
         self._siren_fired = False
+        self._alerted = False
         self.last_ai_time = 0.0
         self.last_alert_time = 0.0
         self.said: List[str] = []
 
         self.persons = 0
+        self.pending = 0
         self.insiders_in_view: List[str] = []
         self._insider_seen: dict[str, float] = {}
         self._insider_logged: dict[str, float] = {}
+        self._greeted: dict[str, float] = {}
 
         self.last_message: str | None = None
         self.last_message_time: float | None = None
@@ -73,40 +78,67 @@ class BrainService:
     def armed(self) -> bool:
         return self.settings.get().armed
 
+    @property
+    def incident_active(self) -> bool:
+        return self.incident_start is not None
+
+    def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None) -> None:
+        self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name())
+
     # ---- inputs ---------------------------------------------------------
     def process(self, detections: List[Detection], now: float | None = None) -> None:
         now = self.clock() if now is None else now
         cfg = self.settings.get()
         with self._lock:
             persons = [d for d in detections if d.class_name == "person"]
-            known = [d for d in persons if d.known]
-            unknown = [d for d in persons if not d.known]
-            self.persons = len(persons)
+            known = [d for d in persons if d.status == "known"]
+            unknown = [d for d in persons if d.status == "unknown"]
+            pending = [d for d in persons if d.status == "pending"]
+            self.persons, self.pending = len(persons), len(pending)
             self.insiders_in_view = sorted({d.identity for d in known if d.identity})
 
             for name in self.insiders_in_view:
                 self._insider_seen[name] = now
-                if now - self._insider_logged.get(name, 0) >= INSIDER_LOG_SECONDS:
+                if name not in self._insider_logged or now - self._insider_logged[name] >= INSIDER_LOG_SECONDS:
                     self._insider_logged[name] = now
-                    self.events.log("INSIDER", f"Recognised {name}", "INFO")
+                    self._log("INSIDER", f"Recognised {name}")
+                self._maybe_greet(name, now)
 
-            if unknown and not any(d.simulated for d in unknown):
-                # A recognised insider who turns away from the camera should not trigger an alarm.
+            real_unknown = [d for d in unknown if not d.simulated]
+            if real_unknown:
+                # An insider who turns away from the camera should not trigger an alarm.
                 grace = cfg.detection.insider_grace_seconds
                 recent = [n for n, t in self._insider_seen.items() if now - t <= grace]
-                if recent and not any(d.face_visible for d in unknown) and len(persons) <= len(recent):
-                    unknown = []
+                if recent and not any(d.face_visible for d in real_unknown) and len(persons) <= len(recent):
+                    unknown = [d for d in unknown if d.simulated]
 
             if unknown and cfg.armed:
                 if self.incident_start is None:
-                    self._begin_incident(now, simulated=any(d.simulated for d in unknown))
-                    self.events.log("DETECTION", "Unrecognised person detected" + (" (test)" if self.simulated else ""), "LOW")
+                    self._begin_incident(now, simulated=all(d.simulated for d in unknown))
+                    who = "Unrecognised person" if len(unknown) == 1 else f"{len(unknown)} unrecognised people"
+                    self._log("DETECTION", f"{who} detected" + (" (test)" if self.simulated else ""), "LOW")
                 self.last_seen = now
+            elif pending and self.incident_start is not None:
+                self.last_seen = now  # someone is still there while we work out who they are
             self._update(now)
 
     def tick(self, now: float | None = None) -> None:
         with self._lock:
             self._update(self.clock() if now is None else now)
+
+    def _maybe_greet(self, name: str, now: float) -> None:
+        ai = self.settings.get().ai
+        if not ai.greet_insiders or self.incident_start is not None:
+            return
+        last = self._greeted.get(name)
+        if last is not None and now - last < ai.greet_cooldown_minutes * 60:
+            return
+        self._greeted[name] = now
+        text = greeting(name)
+        if ai.voice_enabled:
+            self.speaker.say(text, ai.voice_rate)
+        self._set_message(text, "greeting")
+        self._log("GREETING", f"Greeted {name}: {text}")
 
     # ---- state machine --------------------------------------------------
     def _begin_incident(self, now: float, simulated: bool = False) -> None:
@@ -117,6 +149,7 @@ class BrainService:
         self._peak = 1
         self._spoken_level = 0
         self._siren_fired = False
+        self._alerted = False
         self.simulated = simulated
         self.said = []
         self.last_alert_time = 0.0
@@ -135,8 +168,8 @@ class BrainService:
             level = 1 + (elapsed >= esc.level2_after) + (elapsed >= esc.level3_after) + (elapsed >= esc.level4_after)
             if level > self.threat_level:
                 self.threat_level = level
-                self.events.log("ESCALATION", f"Threat level {level} ({LEVEL_NAMES[level]}) after {int(elapsed)}s",
-                                SEVERITY[level])
+                self._log("ESCALATION", f"Threat level {level} ({LEVEL_NAMES[level]}) after {int(elapsed)}s",
+                          SEVERITY[level])
         self._peak = max(self._peak, self.threat_level)
         self._countermeasures(now)
 
@@ -144,57 +177,77 @@ class BrainService:
         cfg = self.settings.get()
         esc, level = cfg.escalation, self.threat_level
         seconds = int(now - (self.incident_start or now))
+        camera = self.camera_name()
 
         if level >= esc.record_at_level or self.manual:
             reason = "panic" if self.manual else ("test" if self.simulated else "intruder")
             fresh = not self.recorder.active
             name = self.recorder.start(reason, level)
             if name and fresh:
-                self.events.log("RECORDING", "Recording started", "INFO", recording=name)
+                self._log("RECORDING", "Recording started", recording=name)
         self.recorder.note_level(level)
 
-        if (level >= esc.alert_at_level or self.manual) and now - self.last_alert_time >= ALERT_REPEAT_SECONDS:
+        # Panic alerts are sent once for the whole system by the CameraManager.
+        if not self.manual and level >= esc.alert_at_level and now - self.last_alert_time >= ALERT_REPEAT_SECONDS:
             self.last_alert_time = now
             prefix = "[TEST] " if self.simulated else ""
-            title = f"{prefix}{'Alarm raised' if self.manual else 'Intruder on camera'}"
-            msg = (f"{'Panic button pressed.' if self.manual else f'Unrecognised person on camera for {seconds}s.'} "
-                   f"Threat level {level} ({LEVEL_NAMES[level]}).")
-            if self.notifier.send_alert(title, msg, SEVERITY[level], self.snapshot()):
-                self.events.log("ALERT", f"Owner alerted: {msg}", SEVERITY[level])
+            msg = f"Unrecognised person at {camera} for {seconds}s. Threat level {level} ({LEVEL_NAMES[level]})."
+            if self.notifier.send_alert(f"{prefix}Intruder at {camera}", msg, SEVERITY[level], self.snapshot()):
+                self._alerted = True
+                self._log("ALERT", f"Owner alerted: {msg}", SEVERITY[level])
 
         if not self._siren_fired and (self.manual or (esc.siren_enabled and level >= esc.siren_at_level)):
             self._siren_fired = True
-            if self.siren.start(esc.siren_max_seconds):
-                self.events.log("SIREN", "Siren sounding", "CRITICAL")
+            if self.speaker.siren(True, esc.siren_max_seconds):
+                self._log("SIREN", f"Siren sounding on {self.speaker.describe()}", "CRITICAL")
 
-        someone_there = self.manual or (self.last_seen is not None and now - self.last_seen <= PRESENCE_SECONDS)
+        if self.manual:
+            return  # the panic warning is spoken by the CameraManager on every camera
+        someone_there = self.last_seen is not None and now - self.last_seen <= PRESENCE_SECONDS
         due = now - self.last_ai_time >= voice_cooldown(cfg.ai.persistence)
-        if someone_there and (level > self._spoken_level or due):
-            incident = self._incident_id
-            started = self.ai.request_warning(
-                lambda result: self._on_warning(result, incident),
-                level=level, seconds=seconds, manual=self.manual, said=list(self.said))
-            if started:
-                self.last_ai_time = now
-                self._spoken_level = level
+        if not someone_there or not (level > self._spoken_level or due):
+            return
+        ctx = self.context(level)
+        incident = self._incident_id
+        if level > self._spoken_level:
+            cached = self.ai.take_cached(ctx)
+            if cached:
+                self.last_ai_time, self._spoken_level = now, level
+                self._deliver({"text": cached, "source": "cached", "model": self.ai.last_model, "latency_ms": 0},
+                              incident)
+                return
+        if self.ai.request_warning(lambda result: self._deliver(result, incident), ctx, self.camera_id):
+            self.last_ai_time, self._spoken_level = now, level
 
-    def _on_warning(self, result: dict, incident: int) -> None:
+    def context(self, level: int, manual: bool = False) -> WarningContext:
+        esc = self.settings.get().escalation
+        return WarningContext(
+            level=level, people=max(1, self.persons), location=self.camera_name(),
+            recording=self.recorder.active, alerted=self._alerted, siren=self.speaker.siren_active,
+            siren_next=esc.siren_enabled and esc.siren_at_level == level + 1, manual=manual, said=list(self.said))
+
+    def _set_message(self, text: str, source: str) -> None:
+        self.last_message, self.last_message_time, self.last_message_source = text, time.time(), source
+
+    def _deliver(self, result: dict, incident: int) -> None:
         with self._lock:
             if incident != self._incident_id or self.incident_start is None:
                 return  # the person left while the model was thinking
             text = result["text"]
             self.said.append(text)
-            self.last_message, self.last_message_time = text, time.time()
-            self.last_message_source = result["source"]
+            self._set_message(text, result["source"])
         ai = self.settings.get().ai
         if ai.voice_enabled:
-            self.tts.say(text, ai.voice_rate)
-        via = f"via {result['model']}" if result["source"] == "llm" else "pre-written line, model unavailable"
-        self.events.log("VOICE", f"{text} ({via}, {result['latency_ms']} ms)", "INFO")
+            self.speaker.say(text, ai.voice_rate)
+        via = {"llm": f"via {result.get('model')}", "cached": f"prepared by {result.get('model') or 'the model'}",
+               "fallback": f"pre-written line: {result.get('error') or 'model unavailable'}"
+               }.get(result["source"], result["source"])
+        latency = f", {result['latency_ms']} ms" if result.get("latency_ms") else ""
+        self._log("VOICE", f"{text} ({via}{latency})")
 
     def _end_incident(self, now: float, reason: str) -> None:
         duration = int(now - (self.incident_start or now))
-        self.events.log("CLEARED", f"{reason}. Incident lasted {duration}s, peak level {self._peak}.", "LOW")
+        self._log("CLEARED", f"{reason}. Incident lasted {duration}s, peak level {self._peak}.", "LOW")
         self._incident_id += 1
         self.incident_start = None
         self.last_seen = None
@@ -202,11 +255,13 @@ class BrainService:
         self.manual = False
         self.simulated = False
         self.said = []
-        self.siren.stop()
+        if self._siren_fired:
+            self.speaker.siren(False)
+        self._siren_fired = False
         self.recorder.stop()
 
-    # ---- dashboard actions ----------------------------------------------
-    def trigger_panic(self) -> None:
+    # ---- actions from the CameraManager -----------------------------------
+    def enter_panic(self) -> None:
         now = self.clock()
         with self._lock:
             if self.incident_start is None:
@@ -215,57 +270,55 @@ class BrainService:
             self.threat_level = 4
             self._peak = 4
             self._siren_fired = False
-            self.last_alert_time = 0.0
-            self._spoken_level = 0
-            self.events.log("PANIC", "Alarm raised from the dashboard", "CRITICAL")
             self._countermeasures(now)
 
-    def reset_alarm(self) -> bool:
+    def deliver_panic_message(self, text: str, source: str) -> None:
+        with self._lock:
+            if not self.manual:
+                return
+            self.said.append(text)
+            self._set_message(text, source)
+        ai = self.settings.get().ai
+        if ai.voice_enabled:
+            self.speaker.say(text, ai.voice_rate)
+
+    def reset(self, reason: str = "Alarm reset") -> bool:
         with self._lock:
             if self.incident_start is None:
-                self.siren.stop()
+                self.speaker.siren(False)
                 return False
-            self.events.log("RESET", "Alarm acknowledged from the dashboard", "INFO")
-            self._end_incident(self.clock(), "Alarm reset")
+            self._end_incident(self.clock(), reason)
             return True
 
-    def set_armed(self, armed: bool) -> None:
-        if armed == self.armed:
-            return
-        self.settings.update({"armed": armed})
+    def disarm(self) -> None:
         with self._lock:
-            self.events.log("ARMED" if armed else "DISARMED",
-                            "System armed" if armed else "System disarmed: detections will not raise alarms", "INFO")
-            if not armed and self.incident_start is not None and not self.manual:
+            if self.incident_start is not None and not self.manual:
                 self._end_incident(self.clock(), "System disarmed")
 
     def speak(self, text: str) -> bool:
         ai = self.settings.get().ai
-        text = " ".join(text.split())[:300]
-        if not text:
-            return False
         with self._lock:
-            self.last_message, self.last_message_time, self.last_message_source = text, time.time(), "operator"
-        self.events.log("VOICE", f"{text} (typed by operator)", "INFO")
-        return self.tts.say(text, ai.voice_rate, interrupt=True)
+            self._set_message(text, "operator")
+        self._log("VOICE", f"{text} (typed by operator)")
+        return self.speaker.say(text, ai.voice_rate, interrupt=True)
 
     def _on_recording_finished(self, info: dict) -> None:
         label = {"panic": "panic", "test": "test", "intruder": "intrusion"}.get(info["reason"], info["reason"])
-        self.events.log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip (peak level {info['max_level']})",
-                        "INFO", recording=info["file"])
+        self._log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip (peak level {info['max_level']})",
+                  recording=info["file"])
         esc = self.settings.get().escalation
         if info["max_level"] >= esc.alert_at_level or info["reason"] == "panic":
-            self.notifier.send_clip(f"{'[TEST] ' if info['reason'] == 'test' else ''}Incident clip",
-                                    f"Recording of the {label} ({info['duration']}s, peak level {info['max_level']}).",
-                                    info["path"])
-        self.recorder.prune(self.settings.get().recording.retention_days)
+            camera = self.camera_name()
+            self.notifier.send_clip(f"{'[TEST] ' if info['reason'] == 'test' else ''}Incident clip from {camera}",
+                                    f"Recording of the {label} at {camera} ({info['duration']}s, "
+                                    f"peak level {info['max_level']}).", info["path"])
+        self.prune(self.settings.get().recording.retention_days)
 
     # ---- reporting -------------------------------------------------------
     def status(self) -> dict:
         now = self.clock()
         with self._lock:
             return {
-                "armed": self.armed,
                 "threat_level": self.threat_level,
                 "threat_label": LEVEL_NAMES[self.threat_level],
                 "manual_alarm": self.manual,
@@ -273,11 +326,10 @@ class BrainService:
                 "incident_started": self.incident_start,
                 "incident_seconds": int(now - self.incident_start) if self.incident_start else 0,
                 "persons": self.persons,
+                "pending": self.pending,
                 "insiders_in_view": self.insiders_in_view,
+                "siren_active": self.speaker.siren_active,
                 "last_message": self.last_message,
                 "last_message_time": self.last_message_time,
                 "last_message_source": self.last_message_source,
             }
-
-
-brain_service = BrainService()

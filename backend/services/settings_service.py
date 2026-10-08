@@ -8,21 +8,46 @@ applying to fields that were never edited in the UI.
 import copy
 import json
 import os
+import re
+import secrets
 import threading
 from typing import Callable, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from config import SETTINGS_FILE, env_str
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434"
 OPENAI_COMPAT_DEFAULT_URL = "http://localhost:1234/v1"  # LM Studio's default
+PHONE_SOURCE = "phone"
 
 
-class CameraSettings(BaseModel):
-    # "auto", a device index ("0"), an RTSP/HTTP URL, a video file path, or "none".
+def new_token() -> str:
+    return secrets.token_urlsafe(18)
+
+
+class CameraConfig(BaseModel):
+    id: str = Field(..., pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    name: str = Field("Camera", min_length=1, max_length=40)
+    # "auto", a device index ("0"), an RTSP/HTTP URL, a video file path, "phone" or "none".
     source: str = "auto"
-    name: str = "Camera 1"
+    enabled: bool = True
+    # Phone cameras authenticate with this secret (it is part of the pairing link).
+    token: str = ""
+    # Where warnings and the siren play: this computer, the phone itself, or both.
+    audio: Literal["server", "device", "both"] = "server"
+
+    @property
+    def is_phone(self) -> bool:
+        return self.source == PHONE_SOURCE
+
+    @model_validator(mode="after")
+    def _phone_defaults(self):
+        if self.is_phone and not self.token:
+            self.token = new_token()
+        if not self.is_phone and self.audio != "server":
+            self.audio = "server"  # only phones have a speaker Guardian can reach
+        return self
 
 
 class DetectionSettings(BaseModel):
@@ -31,6 +56,8 @@ class DetectionSettings(BaseModel):
     interval_ms: int = Field(400, ge=100, le=5000)
     face_recognition: bool = True
     face_match_threshold: float = Field(0.36, ge=0.2, le=0.8)
+    # How long a newly seen person may stay unidentified before being treated as a stranger.
+    identify_seconds: float = Field(2.0, ge=0, le=10)
     insider_grace_seconds: int = Field(20, ge=0, le=300)
 
 
@@ -44,6 +71,7 @@ class EscalationSettings(BaseModel):
     siren_enabled: bool = True
     siren_at_level: int = Field(4, ge=1, le=4)
     siren_max_seconds: int = Field(60, ge=5, le=600)
+    offline_alert_seconds: int = Field(60, ge=0, le=3600, description="0 = never")
 
     @model_validator(mode="after")
     def _ordered(self):
@@ -70,15 +98,37 @@ class AISettings(BaseModel):
     persistence: int = Field(60, ge=0, le=100)
     voice_enabled: bool = True
     voice_rate: int = Field(165, ge=80, le=300)
+    greet_insiders: bool = False
+    greet_cooldown_minutes: int = Field(60, ge=1, le=1440)
+
+
+class PhoneSettings(BaseModel):
+    fps: int = Field(8, ge=1, le=15)
+    max_width: int = Field(960, ge=320, le=1920)
+    quality: float = Field(0.7, ge=0.3, le=0.95)
 
 
 class Settings(BaseModel):
     armed: bool = True
-    camera: CameraSettings = CameraSettings()
+    cameras: list[CameraConfig] = [CameraConfig(id="cam1", name="Camera 1")]
     detection: DetectionSettings = DetectionSettings()
     escalation: EscalationSettings = EscalationSettings()
     recording: RecordingSettings = RecordingSettings()
     ai: AISettings = AISettings()
+    phone: PhoneSettings = PhoneSettings()
+
+    @field_validator("cameras")
+    @classmethod
+    def _unique_ids(cls, cams: list[CameraConfig]):
+        ids = [c.id for c in cams]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Camera ids must be unique")
+        if len(cams) > 16:
+            raise ValueError("At most 16 cameras are supported")
+        return cams
+
+    def camera(self, camera_id: str) -> CameraConfig | None:
+        return next((c for c in self.cameras if c.id == camera_id), None)
 
 
 def _env_defaults() -> dict:
@@ -92,7 +142,7 @@ def _env_defaults() -> dict:
         base_url = env_str("OPENAI_BASE_URL", OPENAI_COMPAT_DEFAULT_URL)
         model = env_str("OPENAI_MODEL")
     return {
-        "camera": {"source": env_str("VIDEO_SOURCE", "auto")},
+        "cameras": [{"id": "cam1", "name": "Camera 1", "source": env_str("VIDEO_SOURCE", "auto")}],
         "ai": {
             "provider": provider,
             "base_url": base_url,
@@ -112,8 +162,31 @@ def deep_merge(base: dict, patch: dict) -> dict:
     return out
 
 
+def _migrate(overrides: dict) -> dict:
+    """Settings saved by v2.0 had a single `camera`; turn it into the camera list."""
+    if "camera" in overrides:
+        old = overrides.pop("camera") or {}
+        if "cameras" not in overrides:
+            cam = {"id": "cam1", "name": old.get("name") or "Camera 1"}
+            if old.get("source"):
+                cam["source"] = old["source"]
+            if "source" not in cam:
+                cam["source"] = env_str("VIDEO_SOURCE", "auto")
+            overrides["cameras"] = [cam]
+    return overrides
+
+
 class SettingsError(ValueError):
     pass
+
+
+def slugify(name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:24] or "cam"
+    candidate, n = base, 2
+    while candidate in taken:
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
 
 
 class SettingsService:
@@ -121,13 +194,14 @@ class SettingsService:
         self.path = path
         self._lock = threading.RLock()
         self._listeners: list[Callable[[Settings, Settings], None]] = []
-        self._overrides = self._load_overrides()
+        self._overrides = _migrate(self._load_overrides())
         try:
             self._settings = self._build(self._overrides)
         except SettingsError as exc:
             print(f"[settings] Ignoring invalid {self.path.name}: {exc}")
             self._overrides = {}
             self._settings = self._build({})
+        self._persist_generated()
 
     def _load_overrides(self) -> dict:
         if not self.path.exists():
@@ -138,6 +212,14 @@ class SettingsService:
         except (OSError, json.JSONDecodeError) as exc:
             print(f"[settings] Could not read {self.path}: {exc}")
             return {}
+
+    def _persist_generated(self) -> None:
+        """Phone tokens are generated during validation; save them so pairing links stay valid."""
+        cams = self._overrides.get("cameras")
+        if isinstance(cams, list) and any(isinstance(c, dict) and c.get("source") == PHONE_SOURCE and not c.get("token")
+                                          for c in cams):
+            self._overrides["cameras"] = [c.model_dump() for c in self._settings.cameras]
+            self._save()
 
     @staticmethod
     def _build(overrides: dict) -> Settings:
@@ -160,6 +242,9 @@ class SettingsService:
         with self._lock:
             overrides = deep_merge(self._overrides, patch)
             new = self._build(overrides)
+            if "cameras" in patch:
+                # Store the validated list so generated ids/tokens are persisted.
+                overrides["cameras"] = [c.model_dump() for c in new.cameras]
             old = self._settings
             self._overrides = overrides
             self._settings = new
@@ -171,16 +256,44 @@ class SettingsService:
                 print(f"[settings] Listener error: {exc}")
         return new
 
+    # ---- camera list helpers -------------------------------------------------
+    def add_camera(self, name: str, source: str, audio: str | None = None) -> CameraConfig:
+        with self._lock:
+            cams = [c.model_dump() for c in self.get().cameras]
+            cam = {"id": slugify(name, {c["id"] for c in cams}), "name": name.strip(), "source": source.strip()}
+            if source == PHONE_SOURCE:
+                cam["audio"] = audio or "device"
+            new = self.update({"cameras": cams + [cam]})
+            return new.cameras[-1]
+
+    def update_camera(self, camera_id: str, changes: dict) -> CameraConfig:
+        with self._lock:
+            cams = [c.model_dump() for c in self.get().cameras]
+            for c in cams:
+                if c["id"] == camera_id:
+                    c.update({k: v for k, v in changes.items() if k not in ("id",)})
+                    break
+            else:
+                raise KeyError(camera_id)
+            return self.update({"cameras": cams}).camera(camera_id)
+
+    def remove_camera(self, camera_id: str) -> None:
+        with self._lock:
+            cams = [c.model_dump() for c in self.get().cameras if c.id != camera_id]
+            if len(cams) == len(self.get().cameras):
+                raise KeyError(camera_id)
+            self.update({"cameras": cams})
+
+    def on_change(self, listener: Callable[[Settings, Settings], None]) -> None:
+        self._listeners.append(listener)
+
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self._overrides, indent=2), encoding="utf-8")
         os.replace(tmp, self.path)
 
-    def on_change(self, listener: Callable[[Settings, Settings], None]) -> None:
-        self._listeners.append(listener)
-
     def public(self) -> dict:
-        """Settings as sent to the dashboard (API key is never echoed back)."""
+        """Settings as sent to the dashboard (the model API key is never echoed back)."""
         data = self.get().model_dump()
         data["ai"]["api_key_set"] = bool(data["ai"].pop("api_key"))
         return data

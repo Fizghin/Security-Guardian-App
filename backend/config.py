@@ -29,6 +29,9 @@ FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
+# HTTPS port that phones on the local network use as cameras (0 turns phone cameras off).
+# It only serves the phone camera page; the dashboard stays on HOST:PORT.
+PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
 
 for _d in (DATA_DIR, RECORDINGS_DIR, FACES_DIR, MODELS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

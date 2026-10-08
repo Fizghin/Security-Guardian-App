@@ -1,13 +1,15 @@
 # Guardian
 
-A home/office security camera that runs entirely on your own computer. It watches a webcam or IP camera, recognises the people who belong there, talks to strangers through your speakers using a **local language model**, escalates to a siren if they stay, records clips and can alert you on Discord or by e-mail. No cloud services are required.
+A home/office CCTV system that runs entirely on your own computer. It watches webcams, IP cameras and **old phones turned into cameras**, recognises the people who belong there, talks to strangers using a **local language model**, escalates to a siren if they stay, records clips and can alert you on Discord or by e-mail. No cloud services are required.
 
 ## What it does
 
+- **Several cameras at once**: webcams, IP/RTSP cameras, phones running an IP-camera app, and any phone with a browser (scan a QR code, no app). Each camera has its own incident, recording and speaker.
+- **Phones as CCTV**: an old phone streams its camera to Guardian and plays the warnings and siren from its own speaker, right where the intruder is. Battery level and offline alerts included.
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
-- **Insider recognition**: add photos of household members or staff; recognised people never trigger alarms.
+- **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
-- **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. If the model is unavailable, pre-written lines are used so the system never goes silent.
+- **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
 - **Dashboard**: live view, event log with filters, chart and CSV export, recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
 - Monitoring runs in the background whether or not the dashboard is open.
@@ -61,20 +63,37 @@ Model suggestions for Ollama:
 - `llama3.2:1b`: for older or slower CPUs. Quicker, but less reliable at sticking to the facts.
 - Anything larger runs fine with a GPU.
 
-On CPU-only machines the model and the detector share cores. Guardian limits each to half the cores so the camera keeps updating while a warning is being written. Warnings arrive a few seconds later on slow machines, and the time limit in Settings decides when to fall back to a pre-written line.
+On CPU-only machines the model and the detector share cores. Guardian limits each to half the cores so the cameras keep updating while a warning is being written.
 
-## Cameras
+How replies are kept reliable:
 
-Settings → Camera → Source accepts:
+- **Facts only.** Each request lists what is true right now: camera location, number of people, time of day, whether video is recording, whether the owner was actually alerted, whether the siren is sounding.
+- **Checked before speaking.** Replies that invent police, guards, dogs or weapons, give the voice a name, claim a recording or alert that did not happen, refuse, or repeat an earlier line are rejected. The model gets one retry with the reason, then a pre-written line is used. Pre-written lines are also tagged with the facts they rely on, so they never claim something false either.
+- **Instant first warning.** While nothing is happening Guardian writes one line per level in advance (kept across restarts), so the first warning plays immediately even when the model needs 10 seconds on a slow CPU.
 
-- `auto`: the first local camera that works
-- `0`, `1`, …: a specific local camera (**Find local cameras** lists them)
-- `http://PHONE-IP:4747/video`: DroidCam
-- `rtsp://user:pass@CAMERA-IP/stream`: most IP cameras
-- a video file path (looped), useful for trying things out
-- `none`: no camera
+Settings → System shows how many lines are prepared and how many replies were rejected.
 
-If a camera drops out, Guardian keeps retrying the same source.
+## Cameras and phones
+
+Settings → Cameras → **Add camera** offers four kinds:
+
+| Kind | Use it for |
+|---|---|
+| **Phone (no app needed)** | Most phones from the last 8 years: Android 5+ with Chrome, or iPhone with iOS 11+ in Safari. |
+| **Phone app or network camera** | Older phones running **IP Webcam** (Android) or **DroidCam**, and RTSP/HTTP IP cameras. Guardian tests the connection and shows a frame before saving. |
+| **Webcam on this computer** | Built-in or USB cameras; *Find cameras* lists them. |
+| **Video file** | A recording, looped, for trying settings out. |
+
+### Turning an old phone into a camera
+
+1. Put the phone on the same Wi-Fi as the computer running Guardian and plug it in.
+2. In Settings → Cameras choose **Add camera → Phone**, give it a name (e.g. "Front door") and pick where warnings play: the phone, this computer, or both.
+3. Scan the QR code with the phone. Phone browsers only allow camera access over HTTPS, so Guardian serves this page with its own certificate and the phone shows a one-time warning. Choose *Advanced → Proceed* (Android) or *Show Details → visit this website* (iPhone).
+4. Tap **Start camera**. The pairing window shows *Phone connected* within a second or two.
+
+On the phone page you can switch between front and back camera, turn on the flashlight, darken the screen, or pause. Guardian shows the phone's battery and warns you if it goes offline while armed (unplugged, covered, flat battery or lost Wi-Fi; Settings → Escalation). If the phone's browser is too old to open the camera, use the IP-camera-app route instead.
+
+The phone connects to port **8443** (`PHONE_PORT` in `backend/.env`). That port only serves the phone page and the phone's frames, each phone needs its own secret pairing link, and **Create new link** in the pairing window revokes an old one. Allow the port through the computer's firewall if phones cannot connect (Windows asks the first time).
 
 ## How alarms escalate
 
@@ -91,7 +110,16 @@ Timings, which levels record, alert and sound the siren, and the voice's persona
 
 ## Insiders
 
-On the Insiders page, add a name and one or more clear, front-facing photos. Photos without a detectable face are rejected. Recognition uses OpenCV's YuNet and SFace models (about 40 MB, downloaded on first use into `backend/storage/models`). A recognised person who turns away is trusted for a short grace period.
+On the Insiders page, either upload clear photos or use **Add from a camera**: stand in front of a camera, take a snapshot and pick your face. Photos from the camera that will see you work best. Photos with no clear face, several similar-sized faces, a strongly turned head or heavy blur are rejected with the reason, and a warning appears if the face looks like another insider. **Check a photo** shows who Guardian thinks is in any picture and how close the match is.
+
+How recognition decides (OpenCV YuNet + SFace, about 40 MB, downloaded on first use into `backend/storage/models`):
+
+- People are tracked across frames and identified from several looks, not one frame. A clear match identifies someone at once; weaker matches need two looks.
+- A newly seen person is *being identified* for up to 2 seconds (Settings → Detection) before counting as a stranger, so a resident walking up is recognised before the system speaks. A clearly visible face that matches nobody is flagged straight away.
+- Small faces of people further away get a second, enlarged look. Blurry, tiny or turned faces only count as weak evidence, and a match that is nearly as close to another insider is treated as unknown rather than guessed.
+- A recognised person who turns away keeps their identity while they stay in view.
+
+Turn on **Greet recognised people by name** (Settings → Voice) to have Guardian say "Welcome back, Sam" at most once per hour per person.
 
 ## Alerts
 
@@ -130,7 +158,10 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 
 ## Troubleshooting
 
-- **"No camera signal"**: another app may be using the camera, or the index is wrong. Use *Find local cameras*.
+- **"No camera signal"**: another app may be using the camera, or the index is wrong. Use *Find cameras*.
+- **Phone can't open the page**: check it is on the same Wi-Fi, that the address in the pairing window is this computer's, and that the firewall allows port 8443. A *Not private* warning is expected the first time.
+- **Phone page opens but the camera is blocked**: allow camera access for the page in the browser's site settings. Very old browsers can't use the camera at all; use the IP Webcam app route.
+- **Phone stops sending when the screen turns off**: keep the page open, use *Dark screen*, and set the screen timeout to the longest option.
 - **Warnings say "pre-written line, model unavailable"**: Ollama isn't running or has no model. Check Settings → Language model; the error explains what is missing.
 - **No sound**: Settings → Voice shows the speech engine. On Linux install `espeak-ng`; the siren needs `paplay`, `aplay` or `ffplay`.
 - **Clip won't play in the browser**: some Chromium builds lack H.264. Use Download, or Chrome/Edge/Firefox/Safari.
@@ -139,3 +170,5 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 ## Security
 
 The dashboard has no login. By default it listens on `127.0.0.1` (this computer only). Setting `HOST=0.0.0.0` lets other devices reach it, so only do that on a network you trust.
+
+The phone port (8443) is reachable from your network but serves only the phone camera page. Every other path, including the dashboard, the API and the live video, returns 404 there, and sending video requires a phone's secret pairing link. Set `PHONE_PORT=0` if you don't use phone cameras.

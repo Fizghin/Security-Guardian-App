@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { FlaskConical, Megaphone } from 'lucide-react'
-import { api, type Status } from '../api'
+import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
+import { api, type CameraStatus, type Status } from '../api'
 import EventRow from '../components/EventRow'
 import LiveVideo from '../components/LiveVideo'
 import RecordingPlayer from '../components/RecordingPlayer'
@@ -12,6 +12,34 @@ import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
 
+const store = {
+  get: (key: string) => {
+    try {
+      return localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  set: (key: string, value: string) => {
+    try {
+      localStorage.setItem(key, value)
+    } catch {
+      // private mode or storage disabled: the choice just isn't remembered
+    }
+  },
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  llm: 'written by the model',
+  cached: 'prepared in advance by the model',
+  fallback: 'pre-written line',
+  operator: 'typed by you',
+  greeting: 'greeting',
+}
+
+const speakerText = (c: CameraStatus) =>
+  c.kind !== 'phone' || c.audio === 'server' ? 'this computer' : c.audio === 'both' ? 'the phone and this computer' : 'the phone'
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 py-2 text-sm">
@@ -21,21 +49,15 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function ThreatCard({ status }: { status: Status }) {
-  const level = status.threat_level
+function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }) {
+  const level = camera.threat_level
   const lv = LEVELS[level]
-  const now = status.server_time
-  const voiceSource =
-    status.last_message_source === 'llm'
-      ? `via ${status.ai.model ?? 'model'}`
-      : status.last_message_source === 'operator'
-        ? 'typed by you'
-        : status.last_message_source === 'fallback'
-          ? 'pre-written line (model unavailable)'
-          : ''
+  const phone = camera.kind === 'phone' ? camera.phone : undefined
+  const speakerOk =
+    camera.kind === 'phone' && camera.audio !== 'server' ? !!phone?.online : status.voice.available !== false
 
   return (
-    <Card title="Status">
+    <Card title={camera.name}>
       <div className="flex items-center gap-3">
         <span className={cx('h-3 w-3 rounded-full', lv.bg)} />
         <div>
@@ -43,11 +65,11 @@ function ThreatCard({ status }: { status: Status }) {
           <div className="text-xs text-zinc-500">
             {!status.armed
               ? 'Disarmed: detections are ignored'
-              : level === 0
-                ? 'Watching for unrecognised people'
-                : status.manual_alarm
-                  ? 'Panic alarm, reset to stand down'
-                  : `Level ${level} of 4${status.test ? ' (test)' : ''}`}
+              : camera.manual_alarm
+                ? 'Panic alarm, reset to stand down'
+                : level === 0
+                  ? 'Watching for unrecognised people'
+                  : `Level ${level} of 4${camera.test ? ' (test)' : ''}`}
           </div>
         </div>
       </div>
@@ -59,57 +81,50 @@ function ThreatCard({ status }: { status: Status }) {
 
       <div className="mt-3 divide-y divide-zinc-800/80">
         <Row label="On camera">
-          {status.persons === 0 ? (
+          {camera.persons === 0 ? (
             <span className="text-zinc-400">Nobody</span>
           ) : (
             <>
-              {status.persons} {status.persons === 1 ? 'person' : 'people'}
-              {status.insiders_in_view.length > 0 && (
-                <span className="block text-xs text-emerald-400">Recognised: {status.insiders_in_view.join(', ')}</span>
+              {camera.persons} {camera.persons === 1 ? 'person' : 'people'}
+              {camera.insiders_in_view.length > 0 && (
+                <span className="block text-xs text-emerald-400">Recognised: {camera.insiders_in_view.join(', ')}</span>
               )}
+              {camera.pending > 0 && <span className="block text-xs text-blue-300">Identifying {camera.pending}…</span>}
             </>
           )}
         </Row>
-        <Row label="Incident">{status.incident_started ? formatDuration(status.incident_seconds) : <span className="text-zinc-400">None</span>}</Row>
+        <Row label="Incident">{camera.incident_started ? formatDuration(camera.incident_seconds) : <span className="text-zinc-400">None</span>}</Row>
         <Row label="Recording">
-          {status.recording.active ? (
-            <span className="text-red-400">{status.recording.stopping ? 'Finishing clip…' : 'Recording'}</span>
+          {camera.recording.active ? (
+            <span className="text-red-400">{camera.recording.stopping ? 'Finishing clip…' : 'Recording'}</span>
           ) : (
             <span className="text-zinc-400">Idle</span>
           )}
         </Row>
-        <Row label="Siren">
-          {status.siren.active ? (
-            <span className="text-red-400">Sounding</span>
-          ) : status.siren.available ? (
-            <span className="text-zinc-400">Off</span>
-          ) : (
-            <span className="text-amber-400">No audio player</span>
-          )}
+        <Row label="Siren">{camera.siren_active ? <span className="text-red-400">Sounding</span> : <span className="text-zinc-400">Off</span>}</Row>
+        <Row label="Speaker">
+          <span className={speakerOk ? 'text-zinc-400' : 'text-amber-400'}>
+            {speakerText(camera)}
+            {!speakerOk && (camera.kind === 'phone' && camera.audio !== 'server' ? ' (phone offline)' : ' (no speech engine)')}
+          </span>
         </Row>
-        <Row label="Voice">
-          {status.voice.available === false ? (
-            <span className="text-amber-400">No speech engine</span>
-          ) : status.voice.speaking ? (
-            'Speaking…'
-          ) : status.ai.busy ? (
-            'Writing warning…'
-          ) : status.voice.error ? (
-            <span className="text-amber-400" title={status.voice.error}>
-              Speaker error
+        {phone && (
+          <Row label="Phone">
+            <span className={phone.online ? 'text-zinc-300' : 'text-amber-400'}>
+              {phone.online ? 'Online' : 'Offline'}
+              {phone.battery != null && ` · ${phone.battery}%${phone.charging ? ' charging' : ''}`}
+              {phone.camera && ` · ${phone.camera} camera`}
             </span>
-          ) : (
-            <span className="text-zinc-400">Ready</span>
-          )}
-        </Row>
+          </Row>
+        )}
       </div>
 
-      {status.last_message && status.last_message_time && (
+      {camera.last_message && camera.last_message_time && (
         <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/60 p-3">
-          <p className="text-sm text-zinc-200">“{status.last_message}”</p>
+          <p className="text-sm text-zinc-200">“{camera.last_message}”</p>
           <p className="mt-1 text-xs text-zinc-500">
-            {timeAgo(status.last_message_time, now)}
-            {voiceSource && ` · ${voiceSource}`}
+            {timeAgo(camera.last_message_time, status.server_time)}
+            {camera.last_message_source && ` · ${SOURCE_LABEL[camera.last_message_source] ?? camera.last_message_source}`}
           </p>
         </div>
       )}
@@ -117,20 +132,19 @@ function ThreatCard({ status }: { status: Status }) {
   )
 }
 
-function Controls({ status }: { status: Status }) {
+function Controls({ camera, status }: { camera: CameraStatus; status: Status }) {
   const notify = useToast()
   const { refresh } = useStatus()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState<'test' | 'speak' | null>(null)
-  const testing = status.pipeline.test_seconds_left > 0
-  const voiceMissing = status.voice.available === false
+  const testing = camera.pipeline.test_seconds_left > 0
 
   const startTest = async () => {
     setBusy('test')
     try {
-      await api.testIntrusion(30)
+      await api.testIntrusion(camera.id, 30)
       await refresh()
-      notify('Test started: a simulated person is added to the feed for 30 seconds', 'success')
+      notify(`Test started on ${camera.name}: a simulated person is added for 30 seconds`, 'success')
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -143,9 +157,9 @@ function Controls({ status }: { status: Status }) {
     if (!text.trim()) return
     setBusy('speak')
     try {
-      await api.speak(text.trim())
+      await api.speak(text.trim(), camera.id)
       setText('')
-      notify('Speaking through the server speakers', 'success')
+      notify(`Speaking on ${speakerText(camera)}`, 'success')
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -154,22 +168,21 @@ function Controls({ status }: { status: Status }) {
   }
 
   return (
-    <Card title="Controls" bodyClassName="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+    <Card title={`Controls · ${camera.name}`} bodyClassName="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
       <form onSubmit={speak}>
         <label className="label" htmlFor="speak-text">
-          Talk through the speaker
+          Talk through {speakerText(camera)}
         </label>
         <div className="flex gap-2">
           <input
             id="speak-text"
             className="input"
             maxLength={300}
-            placeholder={voiceMissing ? 'No speech engine on the server' : 'e.g. Can I help you? The owner is on the way.'}
+            placeholder="e.g. Can I help you? The owner is on the way."
             value={text}
-            disabled={voiceMissing}
             onChange={(e) => setText(e.target.value)}
           />
-          <Button type="submit" icon={<Megaphone className="h-4 w-4" />} loading={busy === 'speak'} disabled={voiceMissing || !text.trim()}>
+          <Button type="submit" icon={<Megaphone className="h-4 w-4" />} loading={busy === 'speak'} disabled={!text.trim()}>
             Speak
           </Button>
         </div>
@@ -179,11 +192,11 @@ function Controls({ status }: { status: Status }) {
         <Button
           icon={<FlaskConical className="h-4 w-4" />}
           loading={busy === 'test'}
-          disabled={testing || !status.camera.connected || !status.armed}
+          disabled={testing || !camera.connected || !status.armed}
           onClick={startTest}
-          title={!status.armed ? 'Arm the system first' : !status.camera.connected ? 'Needs a working camera' : undefined}
+          title={!status.armed ? 'Arm the system first' : !camera.connected ? 'Needs this camera to be connected' : undefined}
         >
-          {testing ? `Test running · ${status.pipeline.test_seconds_left}s` : 'Run test intrusion'}
+          {testing ? `Test running · ${camera.pipeline.test_seconds_left}s` : 'Run test intrusion'}
         </Button>
       </div>
     </Card>
@@ -192,18 +205,90 @@ function Controls({ status }: { status: Status }) {
 
 export default function LivePage() {
   const { status } = useStatus()
-  const { data: events } = usePoll(() => api.events({}, 12), 3000)
+  const { data: events } = usePoll(() => api.events({}, 15), 3000)
   const [clip, setClip] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState(() => store.get('live.camera'))
+  const [layout, setLayout] = useState<'grid' | 'single'>(() => (store.get('live.layout') === 'single' ? 'single' : 'grid'))
+
+  const cameras = status?.cameras ?? []
+  const selected = cameras.find((c) => c.id === selectedId) ?? cameras[0]
+  const select = (id: string) => {
+    setSelectedId(id)
+    store.set('live.camera', id)
+  }
+  const changeLayout = (l: 'grid' | 'single') => {
+    setLayout(l)
+    store.set('live.layout', l)
+  }
+
+  if (status && cameras.length === 0) {
+    return (
+      <Card>
+        <Empty icon={<Camera className="h-8 w-8" />} title="No cameras are running">
+          Add a webcam, an IP camera, or an old phone as a camera.{' '}
+          <a href={href('settings', 'cameras')} className="text-blue-400 hover:text-blue-300">
+            Set up cameras
+          </a>
+        </Empty>
+      </Card>
+    )
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="space-y-4">
-        <LiveVideo cameraName={status?.camera.name ?? 'Camera'} />
-        {status && <Controls status={status} />}
+      <div className="min-w-0 space-y-4">
+        {cameras.length > 1 && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-zinc-400">
+              {cameras.filter((c) => c.connected).length} of {cameras.length} cameras live
+            </span>
+            <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
+              {(
+                [
+                  ['grid', LayoutGrid, 'All cameras'],
+                  ['single', Square, 'One camera'],
+                ] as const
+              ).map(([value, Icon, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => changeLayout(value)}
+                  title={label}
+                  className={cx('flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium', layout === value ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {selected && (cameras.length === 1 || layout === 'single') && (
+          <>
+            <LiveVideo camera={selected} />
+            {cameras.length > 1 && (
+              <div className="grid grid-cols-3 gap-2 lg:grid-cols-4">
+                {cameras.filter((c) => c.id !== selected.id).map((c) => (
+                  <LiveVideo key={c.id} camera={c} compact onSelect={() => select(c.id)} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        {selected && cameras.length > 1 && layout === 'grid' && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {cameras.map((c) => (
+              <LiveVideo key={c.id} camera={c} compact={cameras.length > 2} selected={c.id === selected.id} onSelect={() => select(c.id)} />
+            ))}
+          </div>
+        )}
+
+        {status && selected && <Controls camera={selected} status={status} />}
       </div>
 
       <div className="space-y-4">
-        {status && <ThreatCard status={status} />}
+        {status && selected && <CameraCard camera={selected} status={status} />}
         <Card
           title="Recent activity"
           actions={

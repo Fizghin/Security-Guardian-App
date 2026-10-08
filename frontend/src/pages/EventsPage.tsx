@@ -21,6 +21,7 @@ export default function EventsPage() {
   const [hours, setHours] = useState(24)
   const [type, setType] = useState('')
   const [severity, setSeverity] = useState('')
+  const [camera, setCamera] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
@@ -39,13 +40,14 @@ export default function EventsPage() {
   const filters = (): EventFilters => ({
     type,
     severity,
+    camera,
     search,
     since: new Date(Date.now() - hours * 3600_000).toISOString(),
   })
 
   const summary = usePoll(() => api.eventSummary(hours), 10000, [hours])
   const bySeverity = summary.data?.by_severity
-  const events = usePoll(() => api.events(filters(), PAGE_SIZE, offset), 5000, [hours, type, severity, search, offset])
+  const events = usePoll(() => api.events(filters(), PAGE_SIZE, offset), 5000, [hours, type, severity, camera, search, offset])
 
   const bucket = summary.data?.bucket
   const chartData =
@@ -84,6 +86,16 @@ export default function EventsPage() {
             </option>
           ))}
         </select>
+        {(summary.data?.cameras.length ?? 0) > 0 && (
+          <select className="input w-auto" value={camera} onChange={(e) => setFilter(() => setCamera(e.target.value))} aria-label="Camera">
+            <option value="">All cameras</option>
+            {summary.data?.cameras.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
         <select className="input w-auto" value={severity} onChange={(e) => setFilter(() => setSeverity(e.target.value))} aria-label="Severity">
           <option value="">All severities</option>
           {SEVERITIES.map((s) => (

@@ -4,20 +4,35 @@
 export type Severity = 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 export const SEVERITIES: Severity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 
+export type SourceKind = 'none' | 'auto' | 'index' | 'url' | 'file' | 'phone'
+export type AudioOutput = 'server' | 'device' | 'both'
+export type MessageSource = 'llm' | 'cached' | 'fallback' | 'operator' | 'greeting'
+
+export interface PhoneInfo {
+  battery?: number
+  charging?: boolean
+  camera?: string
+  user_agent?: string
+  address?: string
+  state?: string
+  online: boolean
+  last_contact: number | null
+}
+
 export interface CameraStatus {
+  id: string
   name: string
   source: string
-  kind: 'none' | 'auto' | 'index' | 'url' | 'file'
+  kind: SourceKind
+  audio: AudioOutput
   active_index: number | null
   connected: boolean
   error: string | null
   width: number
   height: number
   fps: number
-}
-
-export interface Status {
-  armed: boolean
+  phone?: PhoneInfo
+  pipeline: { fps: number; motion: boolean; test_seconds_left: number; error: string | null }
   threat_level: number
   threat_label: string
   manual_alarm: boolean
@@ -25,33 +40,56 @@ export interface Status {
   incident_started: number | null
   incident_seconds: number
   persons: number
+  pending: number
   insiders_in_view: string[]
+  siren_active: boolean
   last_message: string | null
   last_message_time: number | null
-  last_message_source: 'llm' | 'fallback' | 'operator' | null
-  camera: CameraStatus
-  pipeline: { running: boolean; fps: number; motion: boolean; test_seconds_left: number; error: string | null }
+  last_message_source: MessageSource | null
+  recording: { active: boolean; file: string | null; started: number | null; stopping: boolean }
+}
+
+export interface Status {
+  armed: boolean
+  panic: boolean
+  threat_level: number
+  alarm_cameras: string[]
+  cameras: CameraStatus[]
   detector: { loaded: boolean; model: string; device: string | null; inference_ms: number | null; error: string | null }
-  recording: { active: boolean; file: string | null; started: number | null; stopping: boolean; encoder: string }
   siren: { active: boolean; available: boolean; player: string | null; started_at: number | null }
   voice: { available: boolean | null; engine: string | null; error: string | null; speaking: boolean; queued: number }
-  ai: {
-    provider: string
-    base_url: string
-    model: string | null
-    busy: boolean
-    last_source: string | null
-    last_error: string | null
-    last_latency_ms: number | null
-  }
+  ai: AIStatus
   faces: FaceStatus
+  phone: { enabled: boolean; port: number }
   server_time: number
+}
+
+export interface AIStatus {
+  provider: string
+  base_url: string
+  model: string | null
+  busy: boolean
+  last_source: string | null
+  last_error: string | null
+  last_latency_ms: number | null
+  ready_lines: number
+  rejected_replies: number
 }
 
 export interface FaceStatus {
   state: 'idle' | 'downloading' | 'ready' | 'error'
   error: string | null
   enrolled: number
+}
+
+export interface CameraConfig {
+  id: string
+  name: string
+  source: string
+  enabled: boolean
+  audio: AudioOutput
+  kind: SourceKind
+  token?: string
 }
 
 export interface SecurityEvent {
@@ -61,6 +99,7 @@ export interface SecurityEvent {
   description: string
   severity: Severity
   recording: string | null
+  camera: string | null
 }
 
 export interface EventPage {
@@ -76,6 +115,7 @@ export interface EventSummary {
   by_type: Record<string, number>
   by_severity: Record<Severity, number>
   types: string[]
+  cameras: string[]
 }
 
 export interface EventFilters {
@@ -83,6 +123,7 @@ export interface EventFilters {
   severity?: string
   since?: string
   search?: string
+  camera?: string
 }
 
 export interface Recording {
@@ -93,13 +134,16 @@ export interface Recording {
   reason: string
   max_level: number | null
   playable: boolean
+  camera_id: string | null
+  camera: string | null
   thumbnail: boolean
 }
 
 export interface RecordingList {
   items: Recording[]
   usage_bytes: number
-  recording: Status['recording']
+  active: { camera: string; file: string; stopping: boolean }[]
+  encoder: string
 }
 
 export interface Insider {
@@ -118,17 +162,37 @@ export interface UploadResult {
   file: string
   ok: boolean
   error: string | null
+  warning?: string | null
+}
+
+export interface LiveFace {
+  index: number
+  thumbnail: string
+  usable: boolean
+  reason: string | null
+  match: string | null
+  score: number
+}
+
+export interface CheckedFace {
+  thumbnail: string
+  match: string | null
+  score: number
+  runner_up: number
+  quality_ok: boolean
+  reason: string | null
 }
 
 export interface Settings {
   armed: boolean
-  camera: { source: string; name: string }
+  cameras: CameraConfig[]
   detection: {
     confidence: number
     min_person_height: number
     interval_ms: number
     face_recognition: boolean
     face_match_threshold: number
+    identify_seconds: number
     insider_grace_seconds: number
   }
   escalation: {
@@ -141,6 +205,7 @@ export interface Settings {
     siren_enabled: boolean
     siren_at_level: number
     siren_max_seconds: number
+    offline_alert_seconds: number
   }
   recording: { preroll_seconds: number; postroll_seconds: number; max_clip_seconds: number; retention_days: number }
   ai: {
@@ -154,12 +219,14 @@ export interface Settings {
     persistence: number
     voice_enabled: boolean
     voice_rate: number
+    greet_insiders: boolean
+    greet_cooldown_minutes: number
   }
+  phone: { fps: number; max_width: number; quality: number }
 }
 
-export type SettingsPatch = {
-  [K in keyof Settings]?: Settings[K] extends object ? Partial<Settings[K]> & { api_key?: string } : Settings[K]
-}
+type Section = Exclude<keyof Settings, 'armed' | 'cameras'>
+export type SettingsPatch = { [K in Section]?: Partial<Settings[K]> & { api_key?: string } }
 
 export interface AITestResult {
   text: string
@@ -185,13 +252,14 @@ export interface SystemInfo {
   python: string
   data_dir: string
   detector: Status['detector']
-  pipeline: Status['pipeline']
   recording_encoder: string
   recordings_bytes: number
   voice: Status['voice']
   siren: Status['siren']
   faces: FaceStatus
+  ai: AIStatus
   notifications: { discord: boolean; email: boolean; email_to: string | null }
+  phone: { enabled: boolean; port: number; addresses: string[] }
 }
 
 export class ApiError extends Error {
@@ -236,13 +304,32 @@ const query = (params: Record<string, string | number | undefined>) => {
   return s ? `?${s}` : ''
 }
 
+const cam = (id: string) => `/api/cameras/${encodeURIComponent(id)}`
+
 export const api = {
   status: () => request<Status>('/api/status'),
   arm: (armed: boolean) => request<{ armed: boolean }>('/api/arm', json('POST', { armed })),
   panic: () => request<{ ok: boolean }>('/api/panic', json('POST')),
   resetAlarm: () => request<{ ok: boolean; was_active: boolean }>('/api/alarm/reset', json('POST')),
-  testIntrusion: (seconds: number) => request<{ ok: boolean; seconds: number }>('/api/test-intrusion', json('POST', { seconds })),
-  speak: (text: string) => request<{ ok: boolean }>('/api/speak', json('POST', { text })),
+  speak: (text: string, cameraId?: string) => request<{ ok: boolean }>('/api/speak', json('POST', { text, camera_id: cameraId })),
+
+  cameras: () => request<{ cameras: CameraConfig[]; phone: SystemInfo['phone'] }>('/api/cameras'),
+  addCamera: (body: { name: string; source: string; audio?: AudioOutput }) =>
+    request<CameraConfig>('/api/cameras', json('POST', body)),
+  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio'>>) =>
+    request<CameraConfig>(cam(id), json('PATCH', body)),
+  deleteCamera: (id: string) => request<{ ok: boolean }>(cam(id), { method: 'DELETE' }),
+  resetPhoneLink: (id: string) => request<CameraConfig>(`${cam(id)}/reset-link`, json('POST')),
+  pairing: (id: string) => request<{ urls: string[]; qr_svg: string | null; port: number }>(`${cam(id)}/pairing`),
+  testSource: (source: string) =>
+    request<{ ok: boolean; error?: string; width?: number; height?: number; preview?: string }>('/api/cameras/test', json('POST', { source })),
+  scanCameras: () => request<{ cameras: { index: number; width: number; height: number; in_use?: boolean }[] }>('/api/cameras/scan'),
+  testIntrusion: (id: string, seconds: number) =>
+    request<{ ok: boolean; seconds: number }>(`${cam(id)}/test-intrusion`, json('POST', { seconds })),
+  cameraFaces: (id: string) => request<{ faces: LiveFace[] }>(`${cam(id)}/faces`),
+  snapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg`,
+  streamUrl: (id: string) =>
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/stream/${encodeURIComponent(id)}`,
 
   events: (filters: EventFilters, limit = 50, offset = 0) =>
     request<EventPage>(`/api/events${query({ ...filters, limit, offset })}`),
@@ -250,7 +337,7 @@ export const api = {
   eventsCsvUrl: (filters: EventFilters) => `/api/events/export.csv${query({ ...filters })}`,
   clearEvents: () => request<{ deleted: number }>('/api/events', { method: 'DELETE' }),
 
-  recordings: () => request<RecordingList>('/api/recordings'),
+  recordings: (camera?: string) => request<RecordingList>(`/api/recordings${query({ camera })}`),
   recordingUrl: (file: string, download = false) =>
     `/api/recordings/${encodeURIComponent(file)}${download ? '?download=true' : ''}`,
   thumbnailUrl: (file: string) => `/api/recordings/${encodeURIComponent(file)}/thumbnail`,
@@ -263,6 +350,13 @@ export const api = {
     files.forEach((f) => form.append('files', f))
     return request<{ results: UploadResult[] }>('/api/insiders', { method: 'POST', body: form })
   },
+  captureInsider: (cameraId: string, index: number, name: string) =>
+    request<{ name: string; file: string; warning: string | null }>('/api/insiders/capture', json('POST', { camera_id: cameraId, index, name })),
+  checkPhoto: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ faces: CheckedFace[]; threshold: number }>('/api/insiders/check', { method: 'POST', body: form })
+  },
   insiderPhotoUrl: (name: string, file: string) =>
     `/api/insiders/${encodeURIComponent(name)}/photos/${encodeURIComponent(file)}`,
   deleteInsiderPhoto: (name: string, file: string) =>
@@ -274,12 +368,8 @@ export const api = {
   aiModels: (provider: string, baseUrl: string) =>
     request<{ models: string[]; error: string | null }>(`/api/ai/models${query({ provider, base_url: baseUrl })}`),
   aiTest: (level: number, speak: boolean) => request<AITestResult>('/api/ai/test', json('POST', { level, speak })),
-  scanCameras: () => request<{ cameras: { index: number; width: number; height: number; in_use?: boolean }[] }>('/api/cameras/scan'),
 
   system: () => request<SystemInfo>('/api/system'),
   testNotifications: () =>
     request<{ results: { channel: string; ok: boolean; error: string | null }[] }>('/api/notifications/test', json('POST')),
-
-  snapshotUrl: () => '/api/snapshot.jpg',
-  streamUrl: () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/stream`,
 }

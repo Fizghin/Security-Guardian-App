@@ -18,7 +18,7 @@ export default function App() {
   const { data, error, refresh } = usePoll(api.status, 1000)
   const statusValue = useMemo(() => ({ status: data, offline: !!error, refresh }), [data, error, refresh])
 
-  const alarm = !!data && (data.threat_level >= 3 || data.manual_alarm)
+  const alarm = !!data && (data.threat_level >= 3 || data.panic)
   useEffect(() => {
     document.title = `${alarm ? '(!) Alarm · ' : ''}${PAGE_TITLES[page]} · Guardian`
   }, [alarm, page])

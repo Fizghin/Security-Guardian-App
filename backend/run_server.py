@@ -25,7 +25,7 @@ os.chdir(BACKEND_DIR)
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 
-from config import FRONTEND_DIST, HOST, PORT  # noqa: E402
+from config import FRONTEND_DIST, HOST, PHONE_PORT, PORT  # noqa: E402
 from services.ai_service import AIError, ai_service  # noqa: E402
 from services.settings_service import settings_service  # noqa: E402
 
@@ -100,7 +100,13 @@ if __name__ == "__main__":
     if not (FRONTEND_DIST / "index.html").exists():
         print("Dashboard not built yet: run `npm install && npm run build` in frontend/ (install scripts do this).")
     ensure_local_model()
-    print(f"\nGuardian dashboard: {url}   (Ctrl+C to stop)\n")
+    print(f"\nGuardian dashboard: {url}   (Ctrl+C to stop)")
+    if PHONE_PORT > 0:
+        from services.phone_service import lan_addresses
+        ips = lan_addresses()
+        where = f"https://{ips[0]}:{PHONE_PORT}" if ips else f"port {PHONE_PORT}"
+        print(f"Phone cameras connect to {where} (pair them in Settings → Cameras)")
+    print()
     if "--no-browser" not in sys.argv:
         Timer(3.0, lambda: webbrowser.open(url)).start()
     uvicorn.run("main:app", host=HOST, port=PORT, reload=False, log_level="warning")

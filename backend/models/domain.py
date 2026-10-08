@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,3 +13,7 @@ class Detection(BaseModel):
     known: bool = False
     face_visible: bool = False
     simulated: bool = False
+    # Filled in by the tracker
+    track_id: Optional[int] = None
+    status: Literal["known", "unknown", "pending"] = "unknown"
+    match_score: Optional[float] = None

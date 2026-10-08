@@ -39,6 +39,7 @@ export default function EventRow({
         <div className="flex items-center gap-2">
           {time}
           <Badge className={SEVERITY_STYLE[event.severity]}>{eventLabel(event.event_type)}</Badge>
+          {event.camera && <span className="truncate text-[11px] text-zinc-500">{event.camera}</span>}
           <span className="ml-auto">{clip}</span>
         </div>
         <p className="mt-1 line-clamp-2 text-zinc-300">{event.description}</p>
@@ -48,9 +49,10 @@ export default function EventRow({
 
   return (
     <li className="flex flex-col gap-1 px-4 py-2 sm:flex-row sm:items-baseline sm:gap-3">
-      <div className="flex shrink-0 items-baseline gap-3 sm:w-52">
+      <div className="flex shrink-0 items-baseline gap-3 sm:w-80">
         <span className="sm:w-[6.5rem]">{time}</span>
         <Badge className={SEVERITY_STYLE[event.severity]}>{eventLabel(event.event_type)}</Badge>
+        {event.camera && <span className="truncate text-xs text-zinc-500">{event.camera}</span>}
       </div>
       <p className="min-w-0 flex-1 text-zinc-300">{event.description}</p>
       {clip}

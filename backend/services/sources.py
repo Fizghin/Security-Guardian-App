@@ -1,13 +1,16 @@
 """
-Camera capture.
+Camera frame sources.
 
-A single background thread owns the capture device and keeps the most recent
-frame. Sources:
+CaptureSource pulls frames with OpenCV from:
   "auto"            first working local camera
   "0", "1", ...     local camera index (webcam, DroidCam virtual camera, ...)
-  rtsp://, http://  IP camera / DroidCam / phone stream
+  rtsp://, http://  IP camera, or a phone running an IP-camera app
   path/to/file.mp4  a video file, looped (handy for testing)
-  "none"            camera disabled
+  "none"            disabled
+
+PhoneSource receives JPEG frames pushed by a phone's browser (see phone_service).
+
+Both expose get_frame() -> (frame, frame_id, timestamp) and status().
 """
 import os
 import platform
@@ -17,6 +20,7 @@ import time
 import cv2
 
 SYSTEM = platform.system()
+PHONE_TIMEOUT = 4.0  # seconds without a frame before a phone counts as offline
 
 
 def _local_backends():
@@ -28,12 +32,14 @@ def _local_backends():
 
 
 def parse_source(source: str):
-    """Returns (kind, value) where kind is none|auto|index|url|file."""
+    """Returns (kind, value) where kind is none|auto|index|url|file|phone."""
     s = (source or "").strip()
     if not s or s.lower() == "none":
         return "none", None
     if s.lower() == "auto":
         return "auto", None
+    if s.lower() == "phone":
+        return "phone", None
     if s.isdigit():
         return "index", int(s)
     if "://" in s:
@@ -70,34 +76,60 @@ def scan_local_cameras(max_index: int = 6, skip: set[int] | None = None) -> list
     return found
 
 
-class VideoService:
-    def __init__(self):
+def grab_test_frame(source: str, timeout: float = 10.0):
+    """Open a source once and return (frame, error). Used to check a camera before saving it."""
+    kind, value = parse_source(source)
+    if kind in ("none", "phone", "auto"):
+        return None, "Only camera numbers, stream URLs and files can be tested"
+    if kind == "file" and not os.path.isfile(value):
+        return None, f"File not found: {value}"
+    result: dict = {}
+
+    def run():
+        try:
+            cap = open_local_camera(value) if kind == "index" else cv2.VideoCapture(value)
+            if cap is None or not cap.isOpened():
+                result["error"] = "Could not connect. Check the address and that the phone/camera app is running"
+                return
+            ok, frame = cap.read()
+            cap.release()
+            if ok and frame is not None:
+                result["frame"] = frame
+            else:
+                result["error"] = "Connected but no picture arrived"
+        except Exception as exc:
+            result["error"] = str(exc)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return None, f"No answer within {int(timeout)} seconds. Is the phone on the same Wi-Fi?"
+    return result.get("frame"), result.get("error")
+
+
+class CaptureSource:
+    def __init__(self, source: str):
+        self.source = source
+        self.kind, _ = parse_source(source)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._frame = None
         self._frame_id = 0
         self._frame_time = 0.0
-        self.source = "none"
-        self.kind = "none"
         self.active_index: int | None = None
         self.connected = False
-        self.error: str | None = None
+        self.error: str | None = "Camera disabled" if self.kind == "none" else None
         self.width = 0
         self.height = 0
         self.fps = 0.0
 
-    # ---- lifecycle -----------------------------------------------------
-    def start(self, source: str) -> None:
-        self.stop()
-        self.source = source
-        self.kind, _ = parse_source(source)
-        self.error = None
-        if self.kind == "none":
-            self.error = "Camera disabled"
+    def start(self) -> None:
+        if self.kind == "none" or (self._thread and self._thread.is_alive()):
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="video")
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"capture:{self.source}")
         self._thread.start()
 
     def stop(self) -> None:
@@ -109,13 +141,7 @@ class VideoService:
             self._frame = None
         self.connected = False
         self.fps = 0.0
-        self.active_index = None
 
-    @property
-    def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
-
-    # ---- capture loop --------------------------------------------------
     def _open(self):
         kind, value = parse_source(self.source)
         if kind == "auto":
@@ -151,7 +177,6 @@ class VideoService:
             except Exception as exc:
                 self.error = str(exc)
                 self.connected = False
-                print(f"[video] {exc}. Retrying in {backoff:.0f}s")
                 if self._stop.wait(backoff):
                     break
                 backoff = min(backoff * 2, 15.0)
@@ -166,20 +191,16 @@ class VideoService:
             if not 1 <= file_fps <= 120:
                 file_fps = 25.0
             failures, count, window_start = 0, 0, time.time()
-            print(f"[video] Connected to {self.source}")
 
             while not self._stop.is_set():
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    if is_file:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop the file
-                        failures += 1
-                        if failures < 3:
-                            continue
                     failures += 1
+                    if is_file and failures < 3:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop the file
+                        continue
                     if failures >= 30:
                         self.error = "Camera stopped sending frames"
-                        print(f"[video] {self.error}; reconnecting")
                         break
                     time.sleep(0.05)
                     continue
@@ -190,7 +211,6 @@ class VideoService:
                     self._frame_time = time.time()
                 self.connected = True
                 self.height, self.width = frame.shape[:2]
-
                 count += 1
                 elapsed = time.time() - window_start
                 if elapsed >= 2.0:
@@ -205,25 +225,73 @@ class VideoService:
             if not self._stop.is_set():
                 self._stop.wait(1.0)
 
-    # ---- access --------------------------------------------------------
     def get_frame(self):
-        """Returns (frame, frame_id, timestamp) or (None, id, 0). The frame must not be modified."""
         with self._lock:
             return self._frame, self._frame_id, self._frame_time
 
     def status(self) -> dict:
         age = time.time() - self._frame_time if self._frame_time else None
         live = self.connected and age is not None and age < 3
-        return {
-            "source": self.source,
-            "kind": self.kind,
-            "active_index": self.active_index,
-            "connected": live,
-            "error": self.error if not live else None,
-            "width": self.width,
-            "height": self.height,
-            "fps": self.fps if live else 0.0,
-        }
+        return {"kind": self.kind, "active_index": self.active_index, "connected": live,
+                "error": None if live else (self.error or "Connecting…"),
+                "width": self.width, "height": self.height, "fps": self.fps if live else 0.0}
 
 
-video_service = VideoService()
+class PhoneSource:
+    """Frames pushed by a phone browser; created per phone camera."""
+    kind = "phone"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frame = None
+        self._frame_id = 0
+        self._frame_time = 0.0
+        self._times: list[float] = []
+        self.width = self.height = 0
+        self.info: dict = {}
+        self.last_contact = 0.0
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        with self._lock:
+            self._frame = None
+
+    def push(self, frame) -> None:
+        now = time.time()
+        with self._lock:
+            self._frame = frame
+            self._frame_id += 1
+            self._frame_time = now
+            self._times = [t for t in self._times if now - t < 3] + [now]
+        self.last_contact = now
+        self.height, self.width = frame.shape[:2]
+
+    def touch(self, info: dict) -> None:
+        self.last_contact = time.time()
+        self.info.update({k: v for k, v in info.items() if v is not None})
+
+    def get_frame(self):
+        with self._lock:
+            if time.time() - self._frame_time > PHONE_TIMEOUT:
+                return None, self._frame_id, 0.0
+            return self._frame, self._frame_id, self._frame_time
+
+    def status(self) -> dict:
+        now = time.time()
+        live = now - self._frame_time < PHONE_TIMEOUT
+        reachable = now - self.last_contact < PHONE_TIMEOUT
+        if live:
+            error = None
+        elif reachable:
+            error = "Phone is connected but its camera is paused"
+        elif self.last_contact:
+            error = "Phone is offline. Open the camera page on the phone again"
+        else:
+            error = "Waiting for the phone. Scan the pairing code with it"
+        times = [t for t in self._times if now - t < 3]
+        fps = round((len(times) - 1) / (times[-1] - times[0]), 1) if live and len(times) > 2 else 0.0
+        return {"kind": "phone", "active_index": None, "connected": live, "error": error,
+                "width": self.width, "height": self.height, "fps": fps,
+                "phone": {**self.info, "online": reachable, "last_contact": self.last_contact or None}}

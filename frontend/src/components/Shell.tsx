@@ -189,7 +189,7 @@ function AlarmBanner() {
       </div>
     )
   }
-  if (!status || (status.threat_level < 3 && !status.manual_alarm)) return null
+  if (!status || (status.threat_level < 3 && !status.panic)) return null
 
   const reset = async () => {
     setBusy(true)
@@ -204,15 +204,22 @@ function AlarmBanner() {
     }
   }
 
+  const alarming = status.cameras
+    .filter((c) => c.threat_level >= 3 || c.manual_alarm)
+    .sort((a, b) => b.threat_level - a.threat_level)
+  const worst = alarming[0]
+  const siren = status.siren.active || status.cameras.some((c) => c.siren_active)
+
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-red-800 bg-red-700 px-4 py-2 text-sm font-medium text-white">
       <ShieldAlert className="h-4 w-4" />
       <span>
-        {status.manual_alarm
+        {status.panic || !worst
           ? 'Panic alarm active'
-          : `${LEVELS[status.threat_level].label}: unrecognised person on camera for ${formatDuration(status.incident_seconds)}`}
-        {status.test && ' (test)'}
-        {status.siren.active && ' · siren sounding'}
+          : `${LEVELS[worst.threat_level].label} at ${worst.name}: unrecognised person for ${formatDuration(worst.incident_seconds)}`}
+        {!status.panic && alarming.length > 1 && ` (+${alarming.length - 1} more)`}
+        {worst?.test && ' (test)'}
+        {siren && ' · siren sounding'}
       </span>
       <Button size="sm" className="ml-auto" variant="inverse" loading={busy} onClick={reset}>
         Reset alarm

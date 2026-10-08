@@ -49,7 +49,7 @@ export default function RecordingPlayer({
         open
         wide
         onClose={onClose}
-        title={recording ? `${reasonLabel(recording.reason)} · ${formatDateTime(recording.started)}` : file}
+        title={recording ? `${reasonLabel(recording.reason)}${recording.camera ? ` at ${recording.camera}` : ''} · ${formatDateTime(recording.started)}` : file}
         footer={
           <>
             {recording && (

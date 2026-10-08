@@ -20,7 +20,8 @@ function Thumb({ rec }: { rec: Recording }) {
 }
 
 export default function RecordingsPage() {
-  const { data, error, refresh } = usePoll(api.recordings, 5000)
+  const [camera, setCamera] = useState('')
+  const { data, error, refresh } = usePoll(() => api.recordings(camera), 5000, [camera])
   const settings = usePoll(api.settings, 60000)
   const [open, setOpen] = useState<Recording | null>(null)
 
@@ -39,19 +40,31 @@ export default function RecordingsPage() {
             </>
           )}
         </span>
-        <a href={href('settings', 'recording')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
-          Recording settings
-        </a>
+        <div className="flex items-center gap-3">
+          {s && s.cameras.length > 1 && (
+            <select className="input h-8 w-auto py-1 text-xs" value={camera} onChange={(e) => setCamera(e.target.value)} aria-label="Camera">
+              <option value="">All cameras</option>
+              {s.cameras.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <a href={href('settings', 'recording')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
+            Recording settings
+          </a>
+        </div>
       </div>
 
       {error && <ErrorNote>{error.message}</ErrorNote>}
 
-      {data?.recording.active && (
-        <div className="flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+      {data?.active.map((a) => (
+        <div key={a.file} className="flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
           <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-          Recording in progress{data.recording.stopping ? ', finishing the clip' : ''}. It appears here when it is saved.
+          Recording on {a.camera}{a.stopping ? ', finishing the clip' : ''}. It appears here when it is saved.
         </div>
-      )}
+      ))}
 
       {data && items.length === 0 ? (
         <Card>
@@ -83,7 +96,10 @@ export default function RecordingsPage() {
               <div className="flex items-start justify-between gap-2 p-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-zinc-100">{formatDateTime(rec.started)}</div>
-                  <div className="text-xs text-zinc-500">{formatBytes(rec.size)}</div>
+                  <div className="truncate text-xs text-zinc-500">
+                    {rec.camera ? `${rec.camera} · ` : ''}
+                    {formatBytes(rec.size)}
+                  </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <Badge>{reasonLabel(rec.reason)}</Badge>

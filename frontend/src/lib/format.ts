@@ -99,6 +99,9 @@ const EVENT_LABELS: Record<string, string> = {
   NOTIFICATION: 'Notification',
   TEST: 'Test',
   SYSTEM: 'System',
+  GREETING: 'Greeting',
+  CAMERA_OFFLINE: 'Camera offline',
+  CAMERA_ONLINE: 'Camera online',
 }
 
 export const eventLabel = (type: string) =>

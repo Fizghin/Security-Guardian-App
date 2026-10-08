@@ -1,30 +1,49 @@
 import asyncio
+import base64
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+import cv2
+import numpy as np
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from services.ai_service import AIError, ai_service
-from services.brain_service import brain_service
+from config import BACKEND_DIR, PHONE_PORT
+from services.ai_service import AIError, WarningContext, ai_service
+from services.camera_service import camera_manager
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import FaceError, face_service
 from services.notification_service import notification_service
-from services.pipeline_service import pipeline_service
-from services.recording_service import recording_service
-from services.settings_service import SettingsError, settings_service
+from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
+from services.recording_service import recording_library
+from services.settings_service import PHONE_SOURCE, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
+from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
 from services.tts_service import tts_service
-from services.video_service import scan_local_cameras, video_service
 
 router = APIRouter(prefix="/api")
 ws_router = APIRouter()
+phone_router = APIRouter()
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_PHONE_FRAME = 4 * 1024 * 1024
+PHONE_PAGE = BACKEND_DIR / "phone" / "index.html"
+
+
+def _unit(camera_id: str):
+    try:
+        return camera_manager.get(camera_id)
+    except KeyError:
+        raise HTTPException(404, "Camera not found or turned off")
+
+
+def _jpeg_data_url(frame, quality=80) -> str:
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""
 
 
 # ---- live state --------------------------------------------------------------
@@ -36,15 +55,13 @@ def health():
 @router.get("/status")
 def status():
     return {
-        **brain_service.status(),
-        "camera": {**video_service.status(), "name": settings_service.get().camera.name},
-        "pipeline": pipeline_service.status(),
+        **camera_manager.status(),
         "detector": detection_service.status(),
-        "recording": recording_service.status(),
-        "siren": siren_service.status(),
         "voice": tts_service.status(),
+        "siren": siren_service.status(),
         "ai": ai_service.status(),
         "faces": face_service.status(),
+        "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT},
         "server_time": time.time(),
     }
 
@@ -55,58 +72,285 @@ class ArmRequest(BaseModel):
 
 @router.post("/arm")
 def arm(req: ArmRequest):
-    brain_service.set_armed(req.armed)
-    return {"armed": brain_service.armed}
+    camera_manager.set_armed(req.armed)
+    return {"armed": settings_service.get().armed}
 
 
 @router.post("/panic")
 def panic():
-    brain_service.trigger_panic()
+    camera_manager.panic()
     return {"ok": True}
 
 
 @router.post("/alarm/reset")
 def reset_alarm():
-    return {"ok": True, "was_active": brain_service.reset_alarm()}
+    return {"ok": True, "was_active": camera_manager.reset_alarm()}
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=300)
+    camera_id: str | None = None
+
+
+@router.post("/speak")
+def speak(req: SpeakRequest):
+    if req.camera_id:
+        _unit(req.camera_id)
+    if not camera_manager.speak(req.text, req.camera_id):
+        detail = tts_service.error if tts_service.available is False else None
+        raise HTTPException(409, "Nothing could play it: no speech engine on this computer"
+                                 + (f" ({detail})" if detail else "") + " and no phone speaker online")
+    return {"ok": True}
+
+
+# ---- cameras ------------------------------------------------------------------
+class CameraCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+    source: str = Field(..., min_length=1, max_length=500)
+    audio: str | None = None
+
+
+class CameraUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=40)
+    source: str | None = Field(None, min_length=1, max_length=500)
+    enabled: bool | None = None
+    audio: str | None = None
+
+
+def _camera_view(cfg) -> dict:
+    data = cfg.model_dump()
+    data["kind"] = parse_source(cfg.source)[0]
+    if not cfg.is_phone:
+        data.pop("token")
+    return data
+
+
+@router.get("/cameras")
+def list_cameras():
+    return {"cameras": [_camera_view(c) for c in settings_service.get().cameras],
+            "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT, "addresses": lan_addresses()}}
+
+
+@router.post("/cameras")
+def add_camera(req: CameraCreate):
+    if req.source == PHONE_SOURCE and PHONE_PORT <= 0:
+        raise HTTPException(409, "Phone cameras are turned off (PHONE_PORT=0 in backend/.env)")
+    try:
+        cam = settings_service.add_camera(req.name, req.source, req.audio)
+    except SettingsError as exc:
+        raise HTTPException(422, str(exc))
+    event_service.log("SYSTEM", f"Camera added ({'phone' if cam.is_phone else cam.source})", camera=cam.name)
+    return _camera_view(cam)
+
+
+@router.patch("/cameras/{camera_id}")
+def update_camera(camera_id: str, req: CameraUpdate):
+    changes = req.model_dump(exclude_none=True)
+    try:
+        cam = settings_service.update_camera(camera_id, changes)
+    except KeyError:
+        raise HTTPException(404, "Camera not found")
+    except SettingsError as exc:
+        raise HTTPException(422, str(exc))
+    return _camera_view(cam)
+
+
+@router.delete("/cameras/{camera_id}")
+def delete_camera(camera_id: str):
+    cam = settings_service.get().camera(camera_id)
+    if cam is None:
+        raise HTTPException(404, "Camera not found")
+    settings_service.remove_camera(camera_id)
+    event_service.log("SYSTEM", "Camera removed", camera=cam.name)
+    return {"ok": True}
+
+
+@router.post("/cameras/{camera_id}/reset-link")
+def reset_phone_link(camera_id: str):
+    cam = settings_service.get().camera(camera_id)
+    if cam is None or not cam.is_phone:
+        raise HTTPException(404, "Phone camera not found")
+    return _camera_view(settings_service.update_camera(camera_id, {"token": new_token()}))
+
+
+@router.get("/cameras/{camera_id}/pairing")
+def phone_pairing(camera_id: str, address: str = ""):
+    cam = settings_service.get().camera(camera_id)
+    if cam is None or not cam.is_phone:
+        raise HTTPException(404, "Phone camera not found")
+    urls = pairing_urls(cam.token)
+    if address:
+        urls = sorted(urls, key=lambda u: address not in u)
+    return {"urls": urls, "qr_svg": qr_svg(urls[0]) if urls else None, "port": PHONE_PORT}
+
+
+class SourceTest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/cameras/test")
+async def test_source(req: SourceTest):
+    frame, error = await run_in_threadpool(grab_test_frame, req.source)
+    if frame is None:
+        return {"ok": False, "error": error}
+    h, w = frame.shape[:2]
+    return {"ok": True, "width": w, "height": h, "preview": _jpeg_data_url(cv2.resize(frame, (480, int(h * 480 / w))))}
+
+
+@router.get("/cameras/scan")
+async def scan_cameras():
+    in_use = {u.source.active_index for u in camera_manager.units.values()
+              if getattr(u.source, "active_index", None) is not None}
+    found = await run_in_threadpool(scan_local_cameras, 6, in_use)
+    for index in sorted(in_use):
+        found.append({"index": index, "width": 0, "height": 0, "in_use": True})
+    return {"cameras": sorted(found, key=lambda c: c["index"])}
 
 
 class TestRequest(BaseModel):
     seconds: int = Field(30, ge=5, le=120)
 
 
-@router.post("/test-intrusion")
-def test_intrusion(req: TestRequest):
-    if not video_service.status()["connected"]:
-        raise HTTPException(409, "A test needs a working camera feed. Check the camera settings.")
-    if not brain_service.armed:
+@router.post("/cameras/{camera_id}/test-intrusion")
+def test_intrusion(camera_id: str, req: TestRequest):
+    unit = _unit(camera_id)
+    if not unit.connected:
+        raise HTTPException(409, "A test needs this camera's picture. Check that it is connected.")
+    if not settings_service.get().armed:
         raise HTTPException(409, "Arm the system first; a disarmed system ignores people on camera.")
-    pipeline_service.simulate(req.seconds)
-    event_service.log("TEST", f"Test intrusion started for {req.seconds}s", "INFO")
+    unit.simulate(req.seconds)
+    event_service.log("TEST", f"Test intrusion started for {req.seconds}s", camera=unit.name())
     return {"ok": True, "seconds": req.seconds}
 
 
-class SpeakRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=300)
+@router.get("/cameras/{camera_id}/snapshot.jpg")
+def snapshot(camera_id: str):
+    jpeg = _unit(camera_id).snapshot()
+    if jpeg is None:
+        raise HTTPException(503, "No picture from this camera yet")
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
-@router.post("/speak")
-def speak(req: SpeakRequest):
-    if tts_service.available is False:
-        raise HTTPException(409, f"No speech engine on this computer: {tts_service.error}")
-    return {"ok": brain_service.speak(req.text)}
+@router.get("/cameras/{camera_id}/stream.mjpg")
+async def mjpeg_stream(camera_id: str):
+    unit = _unit(camera_id)
+
+    async def frames():
+        last = -1
+        while True:
+            jpeg, frame_id = unit.latest_jpeg()
+            if jpeg is not None and frame_id != last:
+                last = frame_id
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+            else:
+                await asyncio.sleep(0.02)
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
-# ---- events --------------------------------------------------------------------
-def _event_filters(type, severity, since, until, search):
+@router.get("/cameras/{camera_id}/faces")
+async def faces_on_camera(camera_id: str):
+    unit = _unit(camera_id)
+    try:
+        faces = await run_in_threadpool(face_service.faces_in_frame, camera_id, unit.latest_raw())
+    except FaceError as exc:
+        raise HTTPException(409, str(exc))
+    return {"faces": faces}
+
+
+@ws_router.websocket("/ws/stream/{camera_id}")
+async def ws_stream(websocket: WebSocket, camera_id: str):
+    await websocket.accept()
+    last = -1
+    try:
+        while True:
+            unit = camera_manager.units.get(camera_id)
+            jpeg, frame_id = unit.latest_jpeg() if unit else (None, -1)
+            if jpeg is not None and frame_id != last:
+                last = frame_id
+                await websocket.send_bytes(jpeg)
+            else:
+                await asyncio.sleep(0.02)
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass  # the dashboard went away mid-send
+
+
+# ---- phones (also reachable on the HTTPS phone port) ------------------------------
+@phone_router.get("/phone", response_class=HTMLResponse)
+def phone_page():
+    return HTMLResponse(PHONE_PAGE.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
+
+
+def _phone_link(k: str):
+    link = phone_hub.authenticate(k)
+    if link is None:
+        raise HTTPException(401, "Unknown or expired pairing link")
+    return link
+
+
+def _phone_reply(link) -> dict:
+    return {"commands": phone_hub.take_commands(link), "config": settings_service.get().phone.model_dump()}
+
+
+@phone_router.get("/api/phone/hello")
+def phone_hello(k: str = ""):
+    link = _phone_link(k)
+    cam = settings_service.get().camera(link.camera_id)
+    return {"name": cam.name if cam else "Guardian camera", "config": settings_service.get().phone.model_dump()}
+
+
+def _decode(data: bytes):
+    return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+
+
+@phone_router.post("/api/phone/frame")
+async def phone_frame(request: Request, k: str = ""):
+    link = _phone_link(k)
+    body = await request.body()
+    if not body or len(body) > MAX_PHONE_FRAME:
+        raise HTTPException(413, "Frame missing or too large")
+    frame = await run_in_threadpool(_decode, body)
+    if frame is None:
+        raise HTTPException(400, "Not a JPEG image")
+    link.source.push(frame)
+    h = request.headers
+    link.source.touch({
+        "battery": int(h["x-battery"]) if h.get("x-battery", "").isdigit() else None,
+        "charging": h.get("x-charging") == "1" if "x-charging" in h else None,
+        "camera": h.get("x-camera"),
+        "user_agent": (h.get("user-agent") or "")[:160],
+        "address": request.client.host if request.client else None,
+        "state": "streaming",
+    })
+    return _phone_reply(link)
+
+
+class Heartbeat(BaseModel):
+    state: str = "idle"
+    battery: int | None = None
+    charging: bool | None = None
+
+
+@phone_router.post("/api/phone/heartbeat")
+def phone_heartbeat(beat: Heartbeat, request: Request, k: str = ""):
+    link = _phone_link(k)
+    link.source.touch({"state": beat.state, "battery": beat.battery, "charging": beat.charging,
+                       "user_agent": (request.headers.get("user-agent") or "")[:160],
+                       "address": request.client.host if request.client else None})
+    return _phone_reply(link)
+
+
+# ---- events ------------------------------------------------------------------------
+def _event_filters(type, severity, since, until, search, camera):
     return {"event_type": type or None, "severity": severity or None, "since": since or None,
-            "until": until or None, "search": search or None}
+            "until": until or None, "search": search or None, "camera": camera or None}
 
 
 @router.get("/events")
-def list_events(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
-                type: str = "", severity: str = "", since: str = "", until: str = "", search: str = ""):
+def list_events(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), type: str = "",
+                severity: str = "", since: str = "", until: str = "", search: str = "", camera: str = ""):
     try:
-        return event_service.query(limit=limit, offset=offset, **_event_filters(type, severity, since, until, search))
+        return event_service.query(limit=limit, offset=offset,
+                                   **_event_filters(type, severity, since, until, search, camera))
     except ValueError as exc:
         raise HTTPException(422, f"Bad filter: {exc}")
 
@@ -117,8 +361,9 @@ def events_summary(hours: int = Query(24, ge=1, le=24 * 365)):
 
 
 @router.get("/events/export.csv")
-def export_events(type: str = "", severity: str = "", since: str = "", until: str = "", search: str = ""):
-    csv_text = event_service.export_csv(**_event_filters(type, severity, since, until, search))
+def export_events(type: str = "", severity: str = "", since: str = "", until: str = "", search: str = "",
+                  camera: str = ""):
+    csv_text = event_service.export_csv(**_event_filters(type, severity, since, until, search, camera))
     name = f"guardian-events-{datetime.now():%Y%m%d-%H%M}.csv"
     return Response(csv_text, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -128,17 +373,18 @@ def clear_events():
     return {"deleted": event_service.clear()}
 
 
-# ---- recordings ----------------------------------------------------------------
+# ---- recordings --------------------------------------------------------------------
 @router.get("/recordings")
-def list_recordings():
-    return {"items": recording_service.list(), "usage_bytes": recording_service.usage_bytes(),
-            "recording": recording_service.status()}
+def list_recordings(camera: str = ""):
+    active = [{"camera": u.name(), **u.recorder.status()} for u in camera_manager.units.values() if u.recorder.active]
+    return {"items": recording_library.list(camera or None), "usage_bytes": recording_library.usage_bytes(),
+            "active": active, "encoder": recording_library.encoder}
 
 
 @router.get("/recordings/{name}")
 def get_recording(name: str, download: bool = False):
     try:
-        path = recording_service.path(name)
+        path = recording_library.path(name)
     except FileNotFoundError:
         raise HTTPException(404, "Recording not found")
     return FileResponse(path, media_type="video/mp4", filename=path.name if download else None,
@@ -148,7 +394,7 @@ def get_recording(name: str, download: bool = False):
 @router.get("/recordings/{name}/thumbnail")
 def get_thumbnail(name: str):
     try:
-        return FileResponse(recording_service.path(name, ".jpg"), media_type="image/jpeg")
+        return FileResponse(recording_library.path(name, ".jpg"), media_type="image/jpeg")
     except FileNotFoundError:
         raise HTTPException(404, "Thumbnail not found")
 
@@ -156,7 +402,7 @@ def get_thumbnail(name: str):
 @router.delete("/recordings/{name}")
 def delete_recording(name: str):
     try:
-        recording_service.delete(name)
+        recording_library.delete(name)
     except FileNotFoundError:
         raise HTTPException(404, "Recording not found")
     except PermissionError as exc:
@@ -164,7 +410,7 @@ def delete_recording(name: str):
     return {"ok": True}
 
 
-# ---- insiders --------------------------------------------------------------------
+# ---- insiders ----------------------------------------------------------------------
 @router.get("/insiders")
 def list_insiders():
     return {"items": face_service.list_insiders(), "faces": face_service.status(),
@@ -181,13 +427,42 @@ async def add_insider(name: str = Form(...), files: list[UploadFile] = File(...)
             continue
         try:
             saved = await run_in_threadpool(face_service.add_photo, name, data)
-            results.append({"file": upload.filename, "ok": True, "error": None, "name": saved["name"]})
+            results.append({"file": upload.filename, "ok": True, "error": None, "name": saved["name"],
+                            "warning": saved["warning"]})
         except FaceError as exc:
             results.append({"file": upload.filename, "ok": False, "error": str(exc)})
     added = [r for r in results if r["ok"]]
     if added:
         event_service.log("INSIDER", f"Added {len(added)} photo(s) for {added[0]['name']}", "INFO")
     return {"results": results}
+
+
+class CaptureRequest(BaseModel):
+    camera_id: str
+    index: int = Field(..., ge=0)
+    name: str = Field(..., min_length=1, max_length=64)
+
+
+@router.post("/insiders/capture")
+async def capture_insider(req: CaptureRequest):
+    try:
+        saved = await run_in_threadpool(face_service.capture_face, req.camera_id, req.index, req.name)
+    except FaceError as exc:
+        raise HTTPException(409, str(exc))
+    event_service.log("INSIDER", f"Added a photo for {saved['name']} from the camera", "INFO")
+    return saved
+
+
+@router.post("/insiders/check")
+async def check_insider_photo(file: UploadFile = File(...)):
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File is larger than 15 MB")
+    threshold = settings_service.get().detection.face_match_threshold
+    try:
+        return {"faces": await run_in_threadpool(face_service.check_photo, data, threshold), "threshold": threshold}
+    except FaceError as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.get("/insiders/{name}/photos/{file}")
@@ -217,7 +492,7 @@ def delete_insider(name: str):
     return {"ok": True}
 
 
-# ---- settings --------------------------------------------------------------------
+# ---- settings ----------------------------------------------------------------------
 @router.get("/settings")
 def get_settings():
     return settings_service.public()
@@ -225,7 +500,8 @@ def get_settings():
 
 @router.patch("/settings")
 def patch_settings(patch: dict):
-    patch.pop("armed", None)  # arming goes through /api/arm so it is logged
+    patch.pop("armed", None)    # arming goes through /api/arm so it is logged
+    patch.pop("cameras", None)  # cameras have their own endpoints
     if isinstance(patch.get("ai"), dict):
         patch["ai"].pop("api_key_set", None)
     try:
@@ -254,34 +530,30 @@ class AITestRequest(BaseModel):
 
 @router.post("/ai/test")
 async def ai_test(req: AITestRequest):
-    result = await run_in_threadpool(ai_service.generate_warning, req.level, 12)
+    esc = settings_service.get().escalation
+    ctx = WarningContext(level=req.level, location="Test", recording=req.level >= esc.record_at_level,
+                         siren=esc.siren_enabled and req.level >= esc.siren_at_level,
+                         siren_next=esc.siren_enabled and esc.siren_at_level == req.level + 1)
+    result = await run_in_threadpool(ai_service.generate_warning, ctx)
     if req.speak:
         result["spoken"] = tts_service.say(result["text"], settings_service.get().ai.voice_rate, interrupt=True)
     return result
 
 
-@router.get("/cameras/scan")
-async def scan_cameras():
-    active = video_service.active_index
-    found = await run_in_threadpool(scan_local_cameras, 6, {active} if active is not None else None)
-    if active is not None:
-        st = video_service.status()
-        found.append({"index": active, "width": st["width"], "height": st["height"], "in_use": True})
-    return {"cameras": sorted(found, key=lambda c: c["index"])}
-
-
+# ---- system ------------------------------------------------------------------------
 @router.get("/system")
 def system():
     return {
         **system_stats(),
         "detector": detection_service.status(),
-        "pipeline": pipeline_service.status(),
-        "recording_encoder": recording_service.status()["encoder"],
-        "recordings_bytes": recording_service.usage_bytes(),
+        "recording_encoder": recording_library.encoder,
+        "recordings_bytes": recording_library.usage_bytes(),
         "voice": tts_service.status(),
         "siren": siren_service.status(),
         "faces": face_service.status(),
         "notifications": notification_service.status(),
+        "ai": ai_service.status(),
+        "phone": {"enabled": PHONE_PORT > 0, "port": PHONE_PORT, "addresses": lan_addresses()},
     }
 
 
@@ -296,42 +568,3 @@ async def notifications_test():
     if not (status["discord"] or status["email"]):
         raise HTTPException(409, "No notification channel configured. Set DISCORD_WEBHOOK_URL or SMTP_* in backend/.env")
     return {"results": await run_in_threadpool(notification_service.send_test)}
-
-
-# ---- video -------------------------------------------------------------------------
-@router.get("/snapshot.jpg")
-def snapshot():
-    jpeg = pipeline_service.snapshot()
-    if jpeg is None:
-        raise HTTPException(503, "No video frame available")
-    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
-
-
-@router.get("/stream.mjpg")
-async def mjpeg_stream():
-    async def frames():
-        last = -1
-        while True:
-            jpeg, frame_id = pipeline_service.latest_jpeg()
-            if jpeg is not None and frame_id != last:
-                last = frame_id
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-            else:
-                await asyncio.sleep(0.02)
-    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@ws_router.websocket("/ws/stream")
-async def ws_stream(websocket: WebSocket):
-    await websocket.accept()
-    last = -1
-    try:
-        while True:
-            jpeg, frame_id = pipeline_service.latest_jpeg()
-            if jpeg is not None and frame_id != last:
-                last = frame_id
-                await websocket.send_bytes(jpeg)
-            else:
-                await asyncio.sleep(0.02)
-    except (WebSocketDisconnect, RuntimeError, OSError):
-        pass  # the dashboard went away mid-send
