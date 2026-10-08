@@ -169,6 +169,6 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 
 ## Security
 
-The dashboard has no login. By default it listens on `127.0.0.1` (this computer only). Setting `HOST=0.0.0.0` lets other devices reach it, so only do that on a network you trust.
+By default the dashboard listens on `127.0.0.1` (this computer only) and has no password. If other devices can reach it (`HOST=0.0.0.0`, a reverse proxy or a tunnel), set `DASHBOARD_PASSWORD=` in `backend/.env`: the browser then asks for it once (any user name). Behind an https reverse proxy or tunnel, also set `PUBLIC_URL=https://your-address` so phone pairing links use that address and phones can stream from outside your Wi-Fi.
 
 The phone port (8443) is reachable from your network but serves only the phone camera page. Every other path, including the dashboard, the API and the live video, returns 404 there, and sending video requires a phone's secret pairing link. Set `PHONE_PORT=0` if you don't use phone cameras.

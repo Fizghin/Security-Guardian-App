@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import psutil
 import segno
 
-from config import DATA_DIR, PHONE_PORT
+from config import DATA_DIR, PHONE_PORT, PUBLIC_URL
 from services.sources import PhoneSource
 
 TLS_DIR = DATA_DIR / "tls"
@@ -104,7 +104,10 @@ def ensure_certificate() -> tuple[str, str]:
 
 
 def pairing_urls(token: str) -> list[str]:
-    return [f"https://{ip}:{PHONE_PORT}/phone?k={token}" for ip in lan_addresses()]
+    urls = [f"{PUBLIC_URL}/phone?k={token}"] if PUBLIC_URL else []
+    if PHONE_PORT > 0:
+        urls += [f"https://{ip}:{PHONE_PORT}/phone?k={token}" for ip in lan_addresses()]
+    return urls
 
 
 def qr_svg(text: str) -> str:

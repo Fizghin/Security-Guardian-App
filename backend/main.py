@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import contextlib
+import hashlib
+import hmac
 import socket
 from contextlib import asynccontextmanager
 
-from config import FRONTEND_DIST, PHONE_PORT, migrate_legacy_data
+from config import DASHBOARD_PASSWORD, FRONTEND_DIST, PHONE_PORT, migrate_legacy_data
 
 migrate_legacy_data()
 
@@ -117,6 +120,60 @@ class PhonePortGuard:
         await self.app(scope, receive, send)
 
 
+class DashboardPassword:
+    """Optional login for the dashboard (DASHBOARD_PASSWORD). The browser asks once; a cookie then
+    covers requests that can't carry the password, such as the live video WebSocket."""
+
+    COOKIE = "guardian_session"
+    OPEN_PATHS = PHONE_PATHS + ("/api/health",)  # phones authenticate with their pairing link
+
+    def __init__(self, app, password: str):
+        self.app = app
+        self.password = password
+        self.session = hashlib.sha256(f"guardian-session:{password}".encode()).hexdigest() if password else ""
+
+    def _check(self, headers: dict) -> tuple[bool, bool]:
+        """Returns (allowed, set_cookie)."""
+        for part in headers.get(b"cookie", b"").decode("latin-1").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == self.COOKIE and hmac.compare_digest(value.encode("latin-1"), self.session.encode()):
+                return True, False
+        auth = headers.get(b"authorization", b"").decode("latin-1")
+        if auth[:6].lower() == "basic ":
+            try:
+                _, _, given = base64.b64decode(auth[6:]).decode("utf-8").partition(":")
+            except (ValueError, UnicodeDecodeError):
+                return False, False
+            if hmac.compare_digest(given.encode(), self.password.encode()):
+                return True, True
+        return False, False
+
+    async def __call__(self, scope, receive, send):
+        if not self.password or scope["type"] not in ("http", "websocket") or scope["path"].startswith(self.OPEN_PATHS):
+            await self.app(scope, receive, send)
+            return
+        allowed, set_cookie = self._check(dict(scope["headers"]))
+        if not allowed:
+            if scope["type"] == "http":
+                await PlainTextResponse("Guardian password required", status_code=401,
+                                        headers={"WWW-Authenticate": 'Basic realm="Guardian", charset="UTF-8"'})(
+                    scope, receive, send)
+            else:
+                await send({"type": "websocket.close", "code": 1008})
+            return
+        if not set_cookie or scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        cookie = f"{self.COOKIE}={self.session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000".encode()
+
+        async def send_with_cookie(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), (b"set-cookie", cookie)]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_cookie)
+
+
 app = FastAPI(title="Guardian", description="Local AI security cameras", version="2.1.0", lifespan=lifespan)
 
 # The dashboard is normally served by this app (same origin). CORS is only for the
@@ -124,6 +181,7 @@ app = FastAPI(title="Guardian", description="Local AI security cameras", version
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:2500", "http://127.0.0.1:2500"],
                    allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(PhonePortGuard, port=PHONE_PORT)
+app.add_middleware(DashboardPassword, password=DASHBOARD_PASSWORD)
 app.include_router(router)
 app.include_router(ws_router)
 app.include_router(phone_router)

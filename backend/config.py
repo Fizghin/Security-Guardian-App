@@ -42,6 +42,14 @@ def env_str(name: str, default: str = "") -> str:
     return value.strip() if value and value.strip() else default
 
 
+# Password for the dashboard. Set it whenever other devices can reach the dashboard
+# (HOST=0.0.0.0, a reverse proxy or a tunnel). Phones keep using their pairing links.
+DASHBOARD_PASSWORD = env_str("DASHBOARD_PASSWORD")
+# The https address Guardian is reachable at through a reverse proxy or tunnel, e.g.
+# https://guardian.example.com. Phone pairing links then use it first.
+PUBLIC_URL = env_str("PUBLIC_URL").rstrip("/")
+
+
 def migrate_legacy_data() -> None:
     """
     Earlier versions wrote sql_app.db and faces_db/ relative to whatever the
