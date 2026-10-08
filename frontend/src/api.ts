@@ -69,6 +69,7 @@ export interface AIStatus {
   base_url: string
   model: string | null
   busy: boolean
+  loading: boolean
   last_source: string | null
   last_error: string | null
   last_latency_ms: number | null

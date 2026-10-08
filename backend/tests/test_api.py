@@ -66,7 +66,8 @@ def test_phone_camera_end_to_end(client, monkeypatch):
     reply = client.post("/api/phone/frame", params={"k": token}, content=jpeg()).json()
     assert reply["commands"][0]["type"] == "speak" and reply["commands"][0]["text"] == "Hello there"
 
-    for _ in range(60):  # wait for the camera loop to produce a frame
+    deadline = time.time() + 30  # the first frame waits for the person detector to load
+    while time.time() < deadline:
         if client.get(f"/api/cameras/{cam_id}/snapshot.jpg").status_code == 200:
             break
         client.post("/api/phone/frame", params={"k": token}, content=jpeg())

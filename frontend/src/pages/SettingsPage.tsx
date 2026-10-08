@@ -477,7 +477,7 @@ function Stat({ label, value, warn }: { label: string; value: ReactNode; warn?: 
   return (
     <div className="rounded-md border border-zinc-800 p-3">
       <div className="text-xs text-zinc-500">{label}</div>
-      <div className={cx('mt-0.5 truncate text-sm tabular-nums', warn ? 'text-amber-400' : 'text-zinc-100')}>{value}</div>
+      <div title={typeof value === 'string' ? value : undefined} className={cx('mt-0.5 truncate text-sm tabular-nums', warn ? 'text-amber-400' : 'text-zinc-100')}>{value}</div>
     </div>
   )
 }
@@ -494,6 +494,7 @@ function SystemSection() {
         <Stat label="Uptime" value={formatUptime(s.uptime_seconds)} />
         <Stat label="Person detector" value={s.detector.loaded ? `${s.detector.model} on ${s.detector.device}` : s.detector.error ?? 'Loads with the first frame'} warn={!!s.detector.error} />
         <Stat label="Detection time" value={s.detector.inference_ms != null ? `${s.detector.inference_ms} ms` : '–'} />
+        <Stat label="Language model" value={s.ai.loading ? `Loading ${s.ai.model ?? 'model'}…` : s.ai.last_error ?? s.ai.model ?? '–'} warn={!s.ai.loading && !!s.ai.last_error} />
         <Stat label="Voice lines ready" value={`${s.ai.ready_lines} prepared · ${s.ai.rejected_replies} rejected`} />
         <Stat label="Recordings" value={`${formatBytes(s.recordings_bytes)} · ${s.recording_encoder}`} />
         <Stat label="Speech" value={s.voice.available ? s.voice.engine : s.voice.available === false ? 'Not available' : 'Checking…'} warn={s.voice.available === false} />

@@ -422,6 +422,8 @@ class CameraManager:
 
     def _idle_loop(self) -> None:
         while not self._stop.wait(10):
+            if self.settings.get().armed:
+                self.ai.keep_warm()
             busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))
             if not busy:
                 self.ai.prefetch(self.warning_contexts())

@@ -71,7 +71,7 @@ How replies are kept reliable:
 - **Checked before speaking.** Replies that invent police, guards, dogs or weapons, give the voice a name, claim a recording or alert that did not happen, refuse, or repeat an earlier line are rejected. The model gets one retry with the reason, then a pre-written line is used. Pre-written lines are also tagged with the facts they rely on, so they never claim something false either.
 - **Instant first warning.** While nothing is happening Guardian writes one line per level in advance (kept across restarts), so the first warning plays immediately even when the model needs 10 seconds on a slow CPU.
 
-Settings → System shows how many lines are prepared and how many replies were rejected.
+Settings → System shows whether the model is loaded, how many lines are prepared and how many replies were rejected. After a reboot, loading the model from disk can take a minute or two on an older computer; pre-written lines are used until it is ready, and while armed Guardian keeps the model in memory so it is not slow again later.
 
 ## Cameras and phones
 

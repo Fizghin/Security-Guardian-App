@@ -1,3 +1,4 @@
+import threading
 import time
 
 import httpx
@@ -27,6 +28,10 @@ L2 = WarningContext(level=2, recording=True)
     ("This is private property. Please leave now.", L2, None),
     ("The police are on their way. Leave now.", L2, "police"),
     ("I am Officer Thompson. Leave the area.", L2, "officer"),
+    ("Continue to stay, you will be removed by our staff.", L2, "removed"),
+    ("Leave now, our team is coming.", L2, "our team"),
+    ("The authorities have been told. Go away.", L2, "authorities"),
+    ("Your neighbours are watching you. Leave now.", L2, "neighbours"),
     ("This is Sarah from security, please leave.", L2, "gives itself a name"),
     ("I am the security system. Leave now please.", L2, "introduces itself"),
     ("I cannot provide a response that includes personal information.", L2, "refusal"),
@@ -193,3 +198,55 @@ def test_openai_compatible_server(ai, monkeypatch):
     assert calls["models_url"] == "http://localhost:1234/v1/models"
     assert calls["chat_url"] == "http://localhost:1234/v1/chat/completions"
     assert calls["auth"] == {"Authorization": "Bearer k"}
+
+
+def _wait(cond, seconds=2.0):
+    end = time.time() + seconds
+    while not cond() and time.time() < end:
+        time.sleep(0.01)
+    return cond()
+
+
+def test_warm_up_loads_without_a_short_timeout(ai, monkeypatch):
+    seen = _fake_ollama(monkeypatch, ["m"])
+    gate = threading.Event()
+    calls = []
+
+    def post(url, json=None, timeout=None, **kw):
+        calls.append((url, json, timeout))
+        gate.wait(2)  # a slow disk: the load is still running
+        return httpx.Response(200, json={"done": True}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ai_module.httpx, "post", post)
+    assert ai.warm_up(quiet=True)
+    assert _wait(lambda: calls)
+    assert ai.status()["loading"] is True
+    assert ai.warm_up() is False, "one load at a time"
+    assert ai.prefetch([WarningContext(level=1)]) is False, "nothing else is queued behind the load"
+
+    url, body, timeout = calls[0]
+    assert url.endswith("/api/generate") and body == {"model": "m", "keep_alive": ai_module.KEEP_ALIVE}
+    assert timeout.read >= 300, "giving up early makes Ollama abandon the load"
+
+    ai.last_error = "timed out"
+    gate.set()
+    assert _wait(lambda: not ai.loading)
+    assert ai.last_error is None and ai.status()["model"] == "m"
+    assert not seen["posts"], "no chat request was needed"
+
+
+def test_keep_warm_only_refreshes_now_and_then(ai, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ai, "warm_up", lambda quiet=False: calls.append(quiet))
+    ai._warm_attempt = time.time()
+    ai.keep_warm()
+    assert calls == []
+    ai._warm_attempt = time.time() - ai_module.REWARM_SECONDS
+    ai.keep_warm()
+    assert calls == [True]
+
+
+def test_failed_load_is_reported(ai):
+    assert ai.warm_up(quiet=True)
+    assert _wait(lambda: not ai.loading)
+    assert "Cannot reach" in ai.status()["last_error"]

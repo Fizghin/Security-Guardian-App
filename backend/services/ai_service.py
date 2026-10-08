@@ -43,6 +43,11 @@ class AIError(RuntimeError):
 LLM_THREADS = max(2, (os.cpu_count() or 4) // 2)
 CACHE_FILE = DATA_DIR / "voice_cache.json"
 CACHE_PER_KEY = 2
+# Reading a model from a slow disk can take minutes. If the request gives up early, Ollama
+# abandons the half-finished load, so loading gets its own generous timeout.
+LOAD_TIMEOUT = 600
+KEEP_ALIVE = "30m"
+REWARM_SECONDS = 600  # while armed, refresh well within KEEP_ALIVE so the model stays in memory
 
 SITUATIONS = {
     1: "An unrecognised person has just appeared on camera. Greet them and ask who they are or what they need.",
@@ -55,7 +60,8 @@ PANIC_SITUATION = "The owner raised the alarm manually. Tell the person on camer
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _LABEL_RE = re.compile(r"^\s*(guardian|ai|security|system|assistant|voice|speaker)\s*:\s*", re.IGNORECASE)
 _BANNED = re.compile(
-    r"\b(police|cops?|officers?|sheriff|guards?|security (team|staff|personnel)|patrol|dogs?|k-?9|weapons?|guns?|"
+    r"\b(police|cops?|officers?|sheriff|guards?|(our|my|the|security|by) (staff|team|personnel|people|men|crew)|"
+    r"removed|thrown out|escort\w*|authorit(y|ies)|neighbou?rs?|backup|patrol|dogs?|k-?9|weapons?|guns?|"
     r"armed (response|guards?)|shoot|kill|hurt|harm|arrest\w*|jail|prison|lawyers?|sue|drones?|thermal|"
     r"dispatch\w*|on (their|the|its) way|my name is|sergeant|agent|detective|fine of|fined)\b", re.IGNORECASE)
 # Case-insensitive lead-in, but the name itself must be capitalised ("This is Sarah", not "this is private").
@@ -219,6 +225,8 @@ class AIService:
         self.last_source: str | None = None  # llm | cached | fallback
         self.last_model: str | None = None
         self.rejected = 0
+        self.loading = False
+        self._warm_attempt = 0.0
         self._load_cache()
         settings.on_change(self._on_settings_change)
 
@@ -316,14 +324,15 @@ class AIService:
         self._model_cache = (key, model, time.time())
         return model
 
-    def _chat(self, cfg: AISettings, model: str, messages: list[dict], temperature: float = 0.7) -> str:
-        timeout = httpx.Timeout(cfg.timeout_seconds, connect=5)
+    def _chat(self, cfg: AISettings, model: str, messages: list[dict], temperature: float = 0.7,
+              timeout: httpx.Timeout | None = None) -> str:
+        timeout = timeout or httpx.Timeout(cfg.timeout_seconds, connect=5)
         if cfg.provider == "ollama":
             r = httpx.post(f"{self._base(cfg)}/api/chat", timeout=timeout, json={
                 "model": model,
                 "messages": messages,
                 "stream": False,
-                "keep_alive": "30m",
+                "keep_alive": KEEP_ALIVE,
                 "options": {"num_predict": 80, "temperature": temperature, "num_thread": LLM_THREADS},
             })
             r.raise_for_status()
@@ -367,7 +376,8 @@ class AIService:
         except (AIError, httpx.HTTPError, KeyError, ValueError) as exc:
             msg = str(exc) or exc.__class__.__name__
             if isinstance(exc, httpx.TimeoutException):
-                msg = f"Model did not answer within {cfg.timeout_seconds}s"
+                msg = ("Model is still loading" if self.loading
+                       else f"Model did not answer within {cfg.timeout_seconds}s")
             self.last_error, self.last_source, model = msg, "fallback", None
             print(f"[ai] Using pre-written line: {msg}")
             text = get_fallback_message(4 if ctx.manual else ctx.level, cfg.intimidation, cfg.humor,
@@ -398,7 +408,7 @@ class AIService:
     def prefetch(self, contexts: list[WarningContext]) -> bool:
         """While nothing is happening, write one missing cached line. Returns True if work was queued."""
         with self._lock:
-            if self._pending or self._prefetching:
+            if self._pending or self._prefetching or self.loading:
                 return False
             todo = next((c for c in contexts if len(self._lines.get(c.cache_key(), ())) < CACHE_PER_KEY), None)
             if todo is None:
@@ -434,6 +444,7 @@ class AIService:
             "base_url": cfg.base_url,
             "model": self.last_model or cfg.model or None,
             "busy": bool(self._pending),
+            "loading": self.loading,
             "last_source": self.last_source,
             "last_error": self.last_error,
             "last_latency_ms": self.last_latency_ms,
@@ -441,19 +452,56 @@ class AIService:
             "rejected_replies": self.rejected,
         }
 
-    def warm_up(self) -> None:
-        """Load the model into memory in the background so the first warning is quick."""
+    def _load(self, cfg: AISettings, model: str) -> None:
+        timeout = httpx.Timeout(LOAD_TIMEOUT, connect=5)
+        if cfg.provider == "ollama":
+            # An empty request loads the model without generating anything
+            r = httpx.post(f"{self._base(cfg)}/api/generate", timeout=timeout,
+                           json={"model": model, "keep_alive": KEEP_ALIVE})
+            r.raise_for_status()
+        else:
+            self._chat(cfg, model, [{"role": "user", "content": "Reply with: ready"}], timeout=timeout)
+
+    def warm_up(self, quiet: bool = False) -> bool:
+        """Load the model into memory in the background so warnings don't wait for it.
+        Returns False if a load is already running."""
+        with self._lock:
+            if self.loading:
+                return False
+            self.loading = True
+            self._warm_attempt = time.time()
+
         def run():
             cfg = self.settings.get().ai
+            started = time.time()
             try:
                 model = self.resolve_model(cfg)
-                self._chat(cfg, model, [{"role": "user", "content": "Reply with: ready"}])
-                self.last_model = model
-                print(f"[ai] {cfg.provider} model '{model}' is loaded")
+                if not quiet:
+                    print(f"[ai] Loading {cfg.provider} model '{model}'…")
+                self._load(cfg, model)
+                self.last_model, self.last_error = model, None
+                if not quiet:
+                    print(f"[ai] Model '{model}' ready ({time.time() - started:.0f}s)")
             except Exception as exc:
-                self.last_error = str(exc)
-                print(f"[ai] Model not ready: {exc}")
+                error = str(exc) or exc.__class__.__name__
+                if isinstance(exc, httpx.TimeoutException):
+                    error = f"Model did not load within {LOAD_TIMEOUT // 60} minutes"
+                if not quiet or error != self.last_error:
+                    print(f"[ai] Model not ready: {error}")
+                self.last_error = error
+            finally:
+                with self._lock:
+                    self.loading = False
+            if self.settings.get().ai != cfg:  # settings changed during the load
+                self.warm_up()
+
         threading.Thread(target=run, daemon=True, name="ai-warmup").start()
+        return True
+
+    def keep_warm(self) -> None:
+        """Called periodically while armed so the model is never unloaded or cold when needed."""
+        if time.time() - self._warm_attempt >= REWARM_SECONDS:
+            self.warm_up(quiet=True)
 
 
 ai_service = AIService()
