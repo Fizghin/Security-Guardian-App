@@ -24,6 +24,7 @@ RECORDINGS_DIR = DATA_DIR / "recordings"
 FACES_DIR = DATA_DIR / "faces"
 MODELS_DIR = DATA_DIR / "models"
 SNAPSHOTS_DIR = DATA_DIR / "snapshots"  # pictures attached to events
+VISITORS_DIR = DATA_DIR / "visitors"  # face crops of remembered strangers, one folder per visitor
 SETTINGS_FILE = DATA_DIR / "settings.json"
 SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"  # the schedule event last acted on
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(DATA_DIR / 'guardian.db').as_posix()}"
@@ -37,7 +38,7 @@ PORT = int(os.getenv("PORT", "8000"))
 # It only serves the phone camera page; the dashboard stays on HOST:PORT.
 PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
 
-for _d in (DATA_DIR, RECORDINGS_DIR, FACES_DIR, MODELS_DIR, SNAPSHOTS_DIR):
+for _d in (DATA_DIR, RECORDINGS_DIR, FACES_DIR, MODELS_DIR, SNAPSHOTS_DIR, VISITORS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 

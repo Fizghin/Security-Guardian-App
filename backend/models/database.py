@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String, create_engine, inspect, text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, LargeBinary, String, create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import DATABASE_URL
@@ -51,7 +51,52 @@ class SecurityEvent(Base):
         }
 
 
+class Visitor(Base):
+    """A stranger whose face Guardian remembers (see services/visitor_service.py)."""
+    __tablename__ = "visitors"
+    __table_args__ = {"sqlite_autoincrement": True}  # a forgotten visitor's number is never given out again
+
+    id = Column(Integer, primary_key=True)
+    label = Column(String, nullable=True)  # a name given in the dashboard
+    note = Column(String, nullable=True)
+    first_seen = Column(DateTime, default=utcnow)
+    last_seen = Column(DateTime, nullable=True, index=True)
+    visits = Column(Integer, default=0)
+    cameras = Column(String, default="[]")  # JSON list of camera names
+    embedding = Column(LargeBinary, nullable=True)  # float32 mean of the face embeddings below
+
+
+class VisitorSighting(Base):
+    """One continuous appearance of a visitor on a camera (one tracked person)."""
+    __tablename__ = "visitor_sightings"
+
+    id = Column(Integer, primary_key=True)
+    visitor_id = Column(Integer, index=True)
+    started = Column(DateTime, index=True)
+    last_seen = Column(DateTime)
+    camera = Column(String, nullable=True)
+    event_id = Column(Integer, nullable=True)  # the event with a picture of the moment
+    # That event's picture. Event ids start again at 1 when the log is cleared, so a sighting
+    # only shows the event that still has this picture.
+    event_picture = Column(String, nullable=True)
+    new_visit = Column(Boolean, default=False)
+
+
+class VisitorFace(Base):
+    """One of a visitor's best face crops, at most one per sighting."""
+    __tablename__ = "visitor_faces"
+
+    id = Column(Integer, primary_key=True)
+    visitor_id = Column(Integer, index=True)
+    sighting_id = Column(Integer, nullable=True)
+    file = Column(String)  # in storage/visitors/<visitor_id>/
+    quality = Column(Float)
+    embedding = Column(LargeBinary)
+    seen_at = Column(DateTime)
+
+
 def init_db() -> None:
+    # Also creates tables added in later versions (visitors) in an existing database.
     Base.metadata.create_all(bind=engine)
     # create_all never alters existing tables; add columns introduced after the first release.
     existing = {c["name"] for c in inspect(engine).get_columns("security_events")}

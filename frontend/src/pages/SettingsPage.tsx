@@ -5,6 +5,7 @@ import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
+import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -422,6 +423,34 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
           <Slider label="Face match strictness" value={d.draft.face_match_threshold} min={0.2} max={0.8} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => d.set('face_match_threshold', v)} hint="Higher is stricter. 0.36 suits most cameras." />
           <Slider label="Time to identify someone" value={d.draft.identify_seconds} min={0} max={10} step={0.5} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => d.set('identify_seconds', v)} hint="A new person counts as a stranger after this long without a matching face. Strangers whose face is clearly seen are flagged sooner." />
           <Slider label="Trust after recognition" value={d.draft.insider_grace_seconds} min={0} max={300} step={5} format={(v) => `${v} s`} onChange={(v) => d.set('insider_grace_seconds', v)} hint="Keeps trusting an insider who turns away from the camera" />
+        </div>
+      )}
+      {d.draft.face_recognition && (
+        <div className="space-y-4 border-t border-zinc-800 pt-4">
+          <Toggle
+            checked={d.draft.remember_visitors}
+            onChange={(v) => d.set('remember_visitors', v)}
+            label="Remember strangers’ faces"
+            description={
+              <>
+                While armed, keeps the faces of people it doesn’t recognise on this computer and says when they come back. See{' '}
+                <a href={href('visitors')} className="text-blue-400 hover:text-blue-300">
+                  Visitors
+                </a>
+                .
+              </>
+            }
+          />
+          {d.draft.remember_visitors && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Forget visitors after" hint="Days since they were last seen. 0 keeps them until you forget them.">
+                <NumberInput value={d.draft.visitor_retention_days} min={0} max={3650} suffix="days" onChange={(v) => d.set('visitor_retention_days', v)} />
+              </Field>
+              <Field label="Count a new visit after" hint="Time away before coming back counts as another visit">
+                <NumberInput value={d.draft.visit_gap_minutes} min={0} max={1440} suffix="min" onChange={(v) => d.set('visit_gap_minutes', v)} />
+              </Field>
+            </div>
+          )}
         </div>
       )}
     </Section>

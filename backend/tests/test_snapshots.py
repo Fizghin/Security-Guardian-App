@@ -112,6 +112,9 @@ def test_picture_is_deleted_when_its_event_cannot_be_stored(events, monkeypatch)
         def add(self, row):
             pass
 
+        def flush(self):
+            pass
+
         def commit(self):
             raise OperationalError("INSERT", {}, Exception("database is locked"))
 

@@ -74,6 +74,11 @@ class DetectionSettings(BaseModel):
     # How long a newly seen person may stay unidentified before being treated as a stranger.
     identify_seconds: float = Field(2.0, ge=0, le=10)
     insider_grace_seconds: int = Field(20, ge=0, le=300)
+    # Repeat visitors: remember strangers' faces while armed and recognise them when they return.
+    remember_visitors: bool = True
+    visitor_retention_days: int = Field(90, ge=0, le=3650, description="0 = keep forever")
+    # A sighting this long after the visitor was last seen counts as a new visit.
+    visit_gap_minutes: int = Field(30, ge=0, le=1440)
 
 
 class EscalationSettings(BaseModel):

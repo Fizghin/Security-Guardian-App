@@ -8,10 +8,11 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Phones as CCTV**: an old phone streams its camera to Guardian and plays the warnings and siren from its own speaker, right where the intruder is. Battery level and offline alerts included.
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
+- **Repeat visitors**: Guardian remembers strangers' faces and tells you when someone comes back ("seen before: 3 visits, last Tue 23:10"). Name them, or turn them into insiders in one click.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
-- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
+- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider and visitor management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
 - Monitoring runs in the background whether or not the dashboard is open.
 
 ## Requirements
@@ -138,12 +139,27 @@ On the Insiders page, either upload clear photos or use **Add from a camera**: s
 How recognition decides (OpenCV YuNet + SFace, about 40 MB, downloaded on first use into `backend/storage/models`):
 
 - People are tracked across frames and identified from several looks, not one frame. A clear match identifies someone at once; weaker matches need two looks.
-- A newly seen person is *being identified* for up to 2 seconds (Settings → Detection) before counting as a stranger, so a resident walking up is recognised before the system speaks. A clearly visible face that matches nobody is flagged straight away.
+- A newly seen person is *being identified* for up to 2 seconds (Settings → Detection) before counting as a stranger, so a resident walking up is recognised before the system speaks. A clearly visible face that matches nobody is flagged straight away. While Guardian remembers visitors (below), this also happens with no insiders enrolled, so a returning visitor is known before the detection is logged.
 - Small faces of people further away get a second, enlarged look. Blurry, tiny or turned faces only count as weak evidence, and a match that is nearly as close to another insider is treated as unknown rather than guessed.
 - When people stand close together, each face counts only for the one person whose head it fits best, so an insider's face never vouches for a stranger next to them who has turned away.
 - A recognised person who turns away keeps their identity while they stay in view.
 
 Turn on **Greet recognised people by name** (Settings → Voice) to have Guardian say "Welcome back, Sam" at most once per hour per person, only while armed.
+
+## Visitors
+
+While armed, Guardian remembers the faces of people it doesn't recognise and recognises them when they come back. The Visitors page lists everyone it remembers, people seen on more than one visit first (**Only people seen more than once** hides the rest). Each card shows their best face, their name or a number ("Visitor 12"), how many visits, when they were first and last seen and on which cameras.
+
+- **Seen before.** When a remembered visitor comes back, the detection in the event log says so, e.g. "Unrecognised person detected (Visitor 12, seen before: 3 visits, last Tue 23:10)", and so does the alert you receive. If their face only becomes clear after the detection was logged, a separate *Visitor* event says it.
+- **Visits.** Coming back more than 30 minutes after they were last seen (Settings → Detection → *Count a new visit after*) counts as a new visit; anything shorter belongs to the same one.
+- **Details.** Open a card for up to 6 of their best face photos (one per sighting) and a timeline of when and where they were seen, each with the picture from the event log.
+- **Name them.** A name and a note help you tell visitors apart. A named visitor's name shows on the live picture instead of *Unknown*; they are still a stranger and still drawn in red.
+- **This is someone I know.** *Add as insider* adds their face photos to the Insiders page under the name you give (a new insider or an existing one) and removes them from Visitors. From then on they are recognised and never set off the alarm.
+- **Forget.** Deletes a visitor's photos and sightings; **Forget all** deletes everyone. Someone forgotten while still in view is not remembered again until they leave and come back.
+
+How it works: each tracked stranger keeps the best look at their face (sharp, large and facing the camera). It is matched against remembered visitors a little more strictly than insiders are matched, and a face that is about as close to two visitors counts as someone new rather than a guess. A visitor is matched on the average of their saved faces, which gets better with each visit. Saving photos and sightings happens in the background, at most every few seconds per person, and people already recognised from a good look are only looked at again every few seconds, so the cameras keep their frame rate. Insiders are never stored as visitors, and visitors who look like someone later added as an insider are removed at the next hourly clean-up.
+
+**Privacy.** Turning this on means Guardian keeps photos of the faces of everyone it doesn't recognise while armed, including neighbours, delivery people and passers-by your cameras can see. Only people standing in a camera's detection zones count. Everything stays on this computer, in `backend/storage/visitors/` and the event database; nothing is uploaded. Visitors are forgotten 90 days after they were last seen (*Forget visitors after*, 0 keeps them until you forget them), and nothing is remembered while disarmed. Check the rules where you live before recording people outside your own property, and turn it off with **Remember strangers' faces** (Settings → Detection) if you don't need it. Turning it off keeps the visitors already remembered until they expire or you forget them.
 
 ## Alerts
 
@@ -163,7 +179,7 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

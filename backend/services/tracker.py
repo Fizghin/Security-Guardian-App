@@ -12,6 +12,8 @@ system starts talking to them.
 """
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from models.domain import Detection
 
 STRONG_MARGIN = 0.12  # score this far above the threshold counts double
@@ -24,6 +26,10 @@ class FaceEvidence:
     quality_ok: bool = False
     name: str | None = None
     score: float = 0.0
+    # Only when asked for (remembering visitors), for faces that pass the quality gate:
+    feature: np.ndarray | None = None  # the face embedding
+    crop: np.ndarray | None = None     # the face with some margin; a view into the frame
+    quality: float = 0.0               # how good a look this is, to keep the best one
 
 
 @dataclass

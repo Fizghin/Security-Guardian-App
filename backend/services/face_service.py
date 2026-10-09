@@ -7,7 +7,9 @@ Insider photos live in storage/faces/<Name>/<photo>.jpg, with the face
 embedding cached next to each photo as <photo>.npy.
 
 Per frame, analyze() returns FaceEvidence for each person box; the tracker
-turns repeated evidence into a stable identity.
+turns repeated evidence into a stable identity. When asked, it also returns the
+embedding and a crop of each good face, which visitor_service uses to remember
+strangers.
 
 Quality gates were calibrated on SFace: strangers score about 0.0-0.2 against
 an insider, the same person 0.7-0.95 at 25+ px faces, but heavy blur pulls a
@@ -123,6 +125,11 @@ class FaceService:
         threading.Thread(target=self.ensure_ready, daemon=True, name="faces-init").start()
 
     @property
+    def ready(self) -> bool:
+        """The models are loaded."""
+        return self._recognizer is not None
+
+    @property
     def active(self) -> bool:
         """True when recognition can actually tell insiders apart."""
         return self._recognizer is not None and bool(self._gallery)
@@ -157,6 +164,13 @@ class FaceService:
         if sharpness < QUALITY_MIN_SHARPNESS:
             return False, "face too blurry"
         return True, None
+
+    @classmethod
+    def _look(cls, face, sharpness: float, px_scale: float = 1.0) -> float:
+        """How good a look at a face this is, 0..1: bigger, sharper and more frontal is better."""
+        size = min(face[2], face[3]) / px_scale
+        return (float(face[14]) * min(1.0, size / 96) * min(1.0, sharpness / 150)
+                * max(0.0, 1 - cls._yaw(face)))
 
     def _match(self, feat: np.ndarray, threshold: float) -> tuple[str | None, float, float]:
         """Returns (name or None, best score, runner-up score)."""
@@ -389,10 +403,21 @@ class FaceService:
             return q[0] <= cx <= q[0] + q[2] and q[1] <= cy <= q[1] + q[3]
         return centre_in(a, b) or centre_in(b, a)
 
-    def analyze(self, frame, detections: list[Detection], threshold: float) -> list[FaceEvidence]:
-        """Face evidence for each person box (same order as detections)."""
+    def closest_insider(self, feat: np.ndarray) -> tuple[str | None, float]:
+        """The insider whose photos are most like this face and how alike, or (None, 0) with nobody enrolled."""
+        with self._lock:
+            scores = [(max(float(np.dot(feat, f)) for _, f in feats), name) for name, feats in self._gallery.items()]
+        if not scores:
+            return None, 0.0
+        best, name = max(scores)
+        return name, best
+
+    def analyze(self, frame, detections: list[Detection], threshold: float,
+                keep_faces: bool = False) -> list[FaceEvidence]:
+        """Face evidence for each person box (same order as detections). keep_faces: also return the
+        embedding and a crop of good faces, and look for faces even with no insiders enrolled."""
         evidence = [FaceEvidence() for _ in detections]
-        if not self.active or not detections:
+        if not self.ready or not detections or not (self._gallery or keep_faces):
             return evidence
         fh, fw = frame.shape[:2]
         with self._lock:
@@ -405,7 +430,7 @@ class FaceService:
                 face[:14] /= scale
                 seen.append(face)
             for f, i in self._assign(seen, detections, range(len(detections))):
-                evidence[i] = self._evidence(frame, seen[f], threshold)
+                evidence[i] = self._evidence(frame, seen[f], threshold, keep_face=keep_faces)
 
             # Pass 2: people far from the camera. Their faces can be too small for pass 1,
             # so look again in an enlarged crop of the head area. Next to someone else, that crop
@@ -437,14 +462,18 @@ class FaceService:
             waiting = [i for i, ev in enumerate(evidence) if not ev.face_visible]
             for f, i in self._assign([c[0] for c in found], detections, waiting):
                 _, crop, face, up = found[f]
-                evidence[i] = self._evidence(crop, face, threshold, px_scale=up)
+                evidence[i] = self._evidence(crop, face, threshold, px_scale=up, keep_face=keep_faces)
         return evidence
 
-    def _evidence(self, img, face, threshold: float, px_scale: float = 1.0) -> FaceEvidence:
+    def _evidence(self, img, face, threshold: float, px_scale: float = 1.0, keep_face: bool = False) -> FaceEvidence:
         feat, sharpness = self._embed(img, face)
         ok, _ = self._quality(face, sharpness, px_scale)
         name, score, _ = self._match(feat, threshold if ok else threshold + 0.05)
-        return FaceEvidence(face_visible=True, quality_ok=ok, name=name, score=score)
+        ev = FaceEvidence(face_visible=True, quality_ok=ok, name=name, score=score)
+        if keep_face and ok:
+            ev.feature, ev.quality = feat, self._look(face, sharpness, px_scale)
+            ev.crop = self._crop(img, face, 0.6)
+        return ev
 
     def status(self) -> dict:
         return {"state": self.state, "error": self.error, "enrolled": self.enrolled_count}

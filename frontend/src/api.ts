@@ -219,6 +219,45 @@ export interface CheckedFace {
   reason: string | null
 }
 
+export interface Visitor {
+  id: number
+  /** The name given to them, or "Visitor 12" */
+  name: string
+  label: string | null
+  note: string
+  first_seen: string
+  last_seen: string
+  visits: number
+  cameras: string[]
+  /** Face photo file names, best first; shown with visitorPhotoUrl */
+  faces: string[]
+}
+
+export interface VisitorSighting {
+  id: number
+  started: string
+  last_seen: string | null
+  camera: string | null
+  /** This sighting started a new visit */
+  new_visit: boolean
+  /** The event with a picture of the moment, while it is still in the log */
+  event: SecurityEvent | null
+}
+
+export interface VisitorDetail extends Visitor {
+  /** Newest first */
+  sightings: VisitorSighting[]
+}
+
+export interface VisitorList {
+  items: Visitor[]
+  /** Face recognition and "Remember strangers' faces" are both on */
+  enabled: boolean
+  retention_days: number
+  visit_gap_minutes: number
+  faces: FaceStatus
+}
+
 export interface Settings {
   armed: boolean
   cameras: CameraConfig[]
@@ -230,6 +269,9 @@ export interface Settings {
     face_match_threshold: number
     identify_seconds: number
     insider_grace_seconds: number
+    remember_visitors: boolean
+    visitor_retention_days: number
+    visit_gap_minutes: number
   }
   escalation: {
     level2_after: number
@@ -436,6 +478,18 @@ export const api = {
   deleteInsiderPhoto: (name: string, file: string) =>
     request<{ ok: boolean }>(`/api/insiders/${encodeURIComponent(name)}/photos/${encodeURIComponent(file)}`, { method: 'DELETE' }),
   deleteInsider: (name: string) => request<{ ok: boolean }>(`/api/insiders/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  visitors: (repeatOnly: boolean) => request<VisitorList>(`/api/visitors${query({ repeat: repeatOnly ? 'true' : undefined })}`),
+  visitor: (id: number) => request<VisitorDetail>(`/api/visitors/${id}`),
+  updateVisitor: (id: number, body: { label?: string | null; note?: string | null }) =>
+    request<VisitorDetail>(`/api/visitors/${id}`, json('PATCH', body)),
+  makeInsider: (id: number, name: string) =>
+    request<{ name: string; added: number; skipped: number }>(`/api/visitors/${id}/make-insider`, json('POST', { name })),
+  forgetVisitor: (id: number) => request<{ ok: boolean }>(`/api/visitors/${id}`, { method: 'DELETE' }),
+  forgetAllVisitors: () => request<{ deleted: number }>('/api/visitors', { method: 'DELETE' }),
+  // The file name makes the URL unique per photo: a visitor's best faces change as better ones are seen.
+  visitorPhotoUrl: (visitor: Visitor, n: number) =>
+    `/api/visitors/${visitor.id}/photos/${n}.jpg?v=${encodeURIComponent(visitor.faces[n] ?? '')}`,
 
   settings: () => request<Settings>('/api/settings'),
   updateSettings: (patch: SettingsPatch) => request<Settings>('/api/settings', json('PATCH', patch)),

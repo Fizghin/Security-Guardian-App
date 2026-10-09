@@ -26,6 +26,7 @@ from services.siren_service import siren_service
 from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
 from services.tts_service import tts_service
+from services.visitor_service import visitor_service
 
 router = APIRouter(prefix="/api")
 ws_router = APIRouter()
@@ -525,6 +526,78 @@ def delete_insider(name: str):
         raise HTTPException(404, "Insider not found")
     event_service.log("INSIDER", f"Removed insider {name}", "INFO")
     return {"ok": True}
+
+
+# ---- visitors ----------------------------------------------------------------------
+@router.get("/visitors")
+def list_visitors(repeat: bool = False, camera: str = "", search: str = ""):
+    """repeat: only people seen on more than one visit."""
+    det = settings_service.get().detection
+    return {"items": visitor_service.list(repeat, camera, search),
+            "enabled": det.face_recognition and det.remember_visitors,
+            "retention_days": det.visitor_retention_days, "visit_gap_minutes": det.visit_gap_minutes,
+            "faces": face_service.status()}
+
+
+@router.get("/visitors/{visitor_id}")
+def get_visitor(visitor_id: int):
+    try:
+        return visitor_service.get(visitor_id)
+    except KeyError:
+        raise HTTPException(404, "Visitor not found")
+
+
+@router.get("/visitors/{visitor_id}/photos/{n}.jpg")
+def get_visitor_photo(visitor_id: int, n: int, v: str = ""):
+    """n: the face's place among the visitor's best (0 = best). v: its file name, which makes the URL
+    unique to that picture so browsers may cache it."""
+    try:
+        path = visitor_service.photo_path(visitor_id, n, v)
+    except FileNotFoundError:
+        raise HTTPException(404, "Photo not found")
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=86400" if v else "no-cache"})
+
+
+class VisitorUpdate(BaseModel):
+    label: str | None = Field(None, max_length=40)
+    note: str | None = Field(None, max_length=300)
+
+
+@router.patch("/visitors/{visitor_id}")
+def update_visitor(visitor_id: int, req: VisitorUpdate):
+    try:
+        return visitor_service.update(visitor_id, req.model_dump(exclude_unset=True))
+    except KeyError:
+        raise HTTPException(404, "Visitor not found")
+
+
+class MakeInsiderRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+
+
+@router.post("/visitors/{visitor_id}/make-insider")
+async def make_insider(visitor_id: int, req: MakeInsiderRequest):
+    try:
+        return await run_in_threadpool(visitor_service.make_insider, visitor_id, req.name)
+    except KeyError:
+        raise HTTPException(404, "Visitor not found")
+    except FaceError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.delete("/visitors/{visitor_id}")
+def forget_visitor(visitor_id: int):
+    try:
+        visitor_service.forget(visitor_id)
+    except KeyError:
+        raise HTTPException(404, "Visitor not found")
+    return {"ok": True}
+
+
+@router.delete("/visitors")
+def forget_all_visitors():
+    return {"deleted": visitor_service.forget_all()}
 
 
 # ---- settings ----------------------------------------------------------------------

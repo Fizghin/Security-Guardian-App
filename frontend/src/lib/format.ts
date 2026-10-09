@@ -38,6 +38,7 @@ const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 const shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
 const hourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
+const dayTimeFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 // Wall-clock formats: they show a time as written, whatever the browser's time zone
 const wallHourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 const wallWeekdayTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
@@ -75,6 +76,9 @@ export function isToday(iso: string): boolean {
   const now = new Date()
   return d.toDateString() === now.toDateString()
 }
+
+/** "today 13:45", or "Oct 3, 13:45" on other days. */
+export const formatSeen = (iso: string) => (isToday(iso) ? `today ${hourFmt.format(new Date(iso))}` : dayTimeFmt.format(new Date(iso)))
 
 export function timeAgo(epochSeconds: number, now = Date.now() / 1000): string {
   const diff = Math.max(0, Math.round(now - epochSeconds))
@@ -127,6 +131,7 @@ const EVENT_LABELS: Record<string, string> = {
   TEST: 'Test',
   SYSTEM: 'System',
   GREETING: 'Greeting',
+  VISITOR: 'Visitor',
   CAMERA_OFFLINE: 'Camera offline',
   CAMERA_ONLINE: 'Camera online',
 }

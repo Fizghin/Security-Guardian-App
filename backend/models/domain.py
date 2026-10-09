@@ -17,3 +17,7 @@ class Detection(BaseModel):
     track_id: Optional[int] = None
     status: Literal["known", "unknown", "pending"] = "unknown"
     match_score: Optional[float] = None
+    # Filled in for strangers who are remembered visitors
+    visitor_id: Optional[int] = None
+    visitor_label: Optional[str] = None  # the name given to them in the dashboard, if any
+    seen_before: Optional[str] = None    # e.g. "Visitor 12, seen before: 3 visits, last Tue 23:10"
