@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import json
+import math
 import time
 from datetime import datetime
+from urllib.parse import urlsplit
 
 import cv2
 import numpy as np
@@ -10,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from config import BACKEND_DIR, PHONE_PORT, PHONES_ENABLED, PUBLIC_URL
+from config import BACKEND_DIR, DEV_ORIGINS, PHONE_PORT, PHONES_ENABLED, PUBLIC_URL
 from services.ai_service import AIError, WarningContext, ai_service
 from services.camera_access import local_camera_blocked
 from services.camera_service import camera_manager
@@ -25,6 +28,7 @@ from services.settings_service import PHONE_SOURCE, NotificationSettings, Settin
 from services.siren_service import siren_service
 from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
+from services.talk_service import TalkError, audio_hub, talk_player, talk_player_status
 from services.tts_service import tts_service
 
 router = APIRouter(prefix="/api")
@@ -64,6 +68,7 @@ def status():
         "ai": ai_service.status(),
         "faces": face_service.status(),
         "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT},
+        "talk": talk_player_status(),
         "schedule": camera_manager.schedule_status(),
         "server_time": time.time(),
         "time_zone": time_zone(),
@@ -100,6 +105,8 @@ class SpeakRequest(BaseModel):
 def speak(req: SpeakRequest):
     if req.camera_id:
         _unit(req.camera_id)
+        if audio_hub.relay(req.camera_id).talking:
+            raise HTTPException(409, "Someone is talking through this camera right now")
     if not camera_manager.speak(req.text, req.camera_id):
         detail = tts_service.error if tts_service.available is False else None
         raise HTTPException(409, "Nothing could play it: no speech engine on this computer"
@@ -270,20 +277,20 @@ async def faces_on_camera(camera_id: str):
     return {"faces": faces}
 
 
+async def _until_closed(websocket: WebSocket) -> None:
+    # For sockets the dashboard never sends anything on: returns when it leaves or the server stops.
+    # Without it a camera with nothing to send would never notice and keep its handler alive forever.
+    try:
+        while (await websocket.receive())["type"] != "websocket.disconnect":
+            pass
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+
+
 @ws_router.websocket("/ws/stream/{camera_id}")
 async def ws_stream(websocket: WebSocket, camera_id: str):
     await websocket.accept()
-
-    async def until_closed() -> None:
-        # The dashboard never sends anything, so this returns when it leaves or the server stops.
-        # Without it a camera with no video would never notice and keep this handler alive forever.
-        try:
-            while (await websocket.receive())["type"] != "websocket.disconnect":
-                pass
-        except (WebSocketDisconnect, RuntimeError, OSError):
-            pass
-
-    closed = asyncio.create_task(until_closed())
+    closed = asyncio.create_task(_until_closed(websocket))
     last = -1
     try:
         while not closed.done():
@@ -298,6 +305,90 @@ async def ws_stream(websocket: WebSocket, camera_id: str):
         pass  # the dashboard went away mid-send
     finally:
         closed.cancel()
+
+
+# ---- live audio: talk through a camera, listen to a phone ----------------------------
+def _dashboard_origin(websocket: WebSocket) -> bool:
+    """Browsers let any website open a WebSocket to this computer, and the dashboard has no password by
+    default. Talk and listen only accept the dashboard's own pages, so no other site can use a camera's
+    microphone or speaker. Clients that aren't browsers send no Origin."""
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    public = urlsplit(PUBLIC_URL)
+    allowed = {f"{public.scheme}://{public.netloc}"} if PUBLIC_URL else set()
+    for host in (websocket.headers.get("host"), websocket.headers.get("x-forwarded-host")):
+        if host:
+            allowed |= {f"http://{host}", f"https://{host}"}
+    return origin in allowed or origin in DEV_ORIGINS
+
+
+async def _refuse(websocket: WebSocket, message: str, kind: str = "error") -> None:
+    await websocket.send_json({"type": kind, "message": message})
+    await websocket.close()
+
+
+@ws_router.websocket("/ws/talk/{camera_id}")
+async def ws_talk(websocket: WebSocket, camera_id: str):
+    """The dashboard sends the owner's voice as 16 kHz 16-bit mono PCM while they hold Talk."""
+    if not _dashboard_origin(websocket):
+        await websocket.close(1008)
+        return
+    await websocket.accept()
+    cam = settings_service.get().camera(camera_id)
+    if cam is None or not cam.enabled:
+        await _refuse(websocket, "Camera not found or turned off")
+        return
+    relay = audio_hub.relay(camera_id)
+    try:
+        talk = relay.start_talk(cam.audio, talk_player)
+    except TalkError as exc:
+        await _refuse(websocket, str(exc), "busy" if exc.busy else "error")
+        return
+    try:
+        await websocket.send_json({"type": "ready", **talk.describe()})
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if message.get("bytes"):
+                talk.feed(message["bytes"])
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        seconds = relay.end_talk(talk)
+        if seconds >= 0.5:
+            await run_in_threadpool(event_service.log, "TALK", f"Spoke through {cam.name} for {max(1, round(seconds))} s",
+                                    camera=cam.name)
+
+
+@ws_router.websocket("/ws/listen/{camera_id}")
+async def ws_listen(websocket: WebSocket, camera_id: str):
+    """Sends the phone's microphone (16 kHz 16-bit mono PCM) while the dashboard listens."""
+    if not _dashboard_origin(websocket):
+        await websocket.close(1008)
+        return
+    await websocket.accept()
+    cam = settings_service.get().camera(camera_id)
+    if cam is None or not cam.enabled or not cam.is_phone:
+        await _refuse(websocket, "Only phone cameras have a microphone to listen to")
+        return
+    relay = audio_hub.relay(camera_id)
+    chunks = relay.add_listener()
+    closed = asyncio.create_task(_until_closed(websocket))
+    try:
+        await websocket.send_json({"type": "ready", "mic": relay.mic_live()})
+        while not closed.done():
+            try:
+                chunk = await asyncio.wait_for(chunks.get(), 0.5)
+            except asyncio.TimeoutError:
+                continue
+            await websocket.send_bytes(chunk)
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        closed.cancel()
+        relay.remove_listener(chunks)
 
 
 # ---- phones (also reachable on the HTTPS phone port) ------------------------------
@@ -363,6 +454,64 @@ def phone_heartbeat(beat: Heartbeat, request: Request, k: str = ""):
                        "user_agent": (request.headers.get("user-agent") or "")[:160],
                        "address": request.client.host if request.client else None})
     return _phone_reply(link)
+
+
+@phone_router.websocket("/api/phone/audio")
+async def phone_audio(websocket: WebSocket, k: str = ""):
+    """The phone's audio link. Phone to server: {"type": "level", "db": peak dBFS} about 4 times a second
+    while its microphone is on, and microphone PCM while asked to. Server to phone: {"type": "listen",
+    "on": bool} and the owner's voice as PCM (both 16 kHz 16-bit mono)."""
+    await websocket.accept()
+    link = phone_hub.authenticate(k)
+    if link is None:
+        await websocket.close(4401)  # the page stops retrying with this link
+        return
+    relay = audio_hub.relay(link.camera_id)
+    phone = relay.connect_phone()
+
+    async def deliver() -> None:
+        try:
+            # Checked again every 2 s too, so a revoked phone that sends nothing stops hearing the owner
+            while phone_hub.authenticate(k) is link:
+                try:
+                    message = await asyncio.wait_for(phone.queue.get(), 2)
+                except asyncio.TimeoutError:
+                    continue
+                if message is None:
+                    await websocket.close(4000)  # the same page connected again
+                    return
+                if isinstance(message, bytes):
+                    await websocket.send_bytes(message)
+                else:
+                    await websocket.send_json(message)
+            await websocket.close(4401)
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            pass  # the phone went away mid-send
+
+    sender = asyncio.create_task(deliver())
+    try:
+        while not sender.done():
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if phone_hub.authenticate(k) is not link:  # a new pairing link was made, or the camera removed
+                await websocket.close(4401)
+                break
+            if message.get("bytes"):
+                relay.phone_audio(message["bytes"])
+            elif message.get("text") and len(message["text"]) < 200:
+                try:
+                    data = json.loads(message["text"])
+                    db = float(data["db"]) if data.get("type") == "level" else math.nan
+                    if math.isfinite(db):
+                        relay.phone_level(max(-100.0, min(0.0, db)))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    pass
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        sender.cancel()
+        relay.disconnect_phone(phone)
 
 
 # ---- events ------------------------------------------------------------------------
@@ -597,6 +746,7 @@ def system():
         "recordings_bytes": recording_library.usage_bytes(),
         "voice": tts_service.status(),
         "siren": siren_service.status(),
+        "talk": talk_player_status(),
         "faces": face_service.status(),
         "notifications": notification_service.status(),
         "ai": ai_service.status(),

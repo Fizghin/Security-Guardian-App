@@ -129,10 +129,12 @@ const EVENT_LABELS: Record<string, string> = {
   GREETING: 'Greeting',
   CAMERA_OFFLINE: 'Camera offline',
   CAMERA_ONLINE: 'Camera online',
+  SOUND: 'Loud sound',
+  TALK: 'Talk',
 }
 
 export const eventLabel = (type: string) =>
   EVENT_LABELS[type] ?? type.charAt(0) + type.slice(1).toLowerCase().replace(/[_-]/g, ' ')
 
 export const reasonLabel = (reason: string) =>
-  ({ intruder: 'Intrusion', panic: 'Panic', test: 'Test' })[reason] ?? reason
+  ({ intruder: 'Intrusion', panic: 'Panic', test: 'Test', sound: 'Loud sound' })[reason] ?? reason

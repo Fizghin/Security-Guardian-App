@@ -7,7 +7,7 @@ import socket
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
-from config import DASHBOARD_PASSWORD, FRONTEND_DIST, PHONE_PORT, migrate_legacy_data
+from config import DASHBOARD_PASSWORD, DEV_ORIGINS, FRONTEND_DIST, PHONE_PORT, migrate_legacy_data
 
 migrate_legacy_data()
 
@@ -147,7 +147,7 @@ LOGIN_PAGE = """<!doctype html>
 
 class DashboardPassword:
     """Optional sign-in for the dashboard (DASHBOARD_PASSWORD). Browsers get a sign-in page that sets
-    a session cookie, which also covers the live video WebSocket. Scripts can send the password with
+    a session cookie, which also covers the WebSockets for live video, talk and listen. Scripts can send the password with
     HTTP Basic auth (any user name) instead."""
 
     COOKIE = "guardian_session"
@@ -221,8 +221,7 @@ app = FastAPI(title="Guardian", description="Local AI security cameras", version
 
 # The dashboard is normally served by this app (same origin). CORS is only for the
 # Vite dev server, which proxies requests anyway.
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:2500", "http://127.0.0.1:2500"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=list(DEV_ORIGINS), allow_methods=["*"], allow_headers=["*"])
 # The last one added runs first: the phone port turns away non-phone paths before any password prompt.
 app.add_middleware(DashboardPassword, password=DASHBOARD_PASSWORD)
 app.add_middleware(PhonePortGuard, port=PHONE_PORT)

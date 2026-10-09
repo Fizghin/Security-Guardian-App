@@ -6,12 +6,13 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 
 - **Several cameras at once**: webcams, IP/RTSP cameras, phones running an IP-camera app, and any phone with a browser (scan a QR code, no app). Each camera has its own incident, recording and speaker.
 - **Phones as CCTV**: an old phone streams its camera to Guardian and plays the warnings and siren from its own speaker, right where the intruder is. Battery level and offline alerts included.
+- **Two-way audio**: hold a button to talk through a camera's speaker, listen to what a phone camera hears, and get alerts for loud sounds such as breaking glass or a slammed door.
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
-- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
+- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, typed or spoken messages through a camera's speaker and a one-click test intrusion.
 - Monitoring runs in the background whether or not the dashboard is open.
 
 ## Requirements
@@ -98,13 +99,23 @@ Settings → Cameras → **Add camera** offers four kinds:
 ### Turning an old phone into a camera
 
 1. Put the phone on the same Wi-Fi as the computer running Guardian and plug it in.
-2. In Settings → Cameras choose **Add camera → Phone**, give it a name (e.g. "Front door") and pick where warnings play: the phone, this computer, or both.
+2. In Settings → Cameras choose **Add camera → Phone**, give it a name (e.g. "Front door") and pick where warnings and your voice play: the phone, this computer, or both.
 3. Scan the QR code with the phone. Phone browsers only allow camera access over HTTPS, so Guardian serves this page with its own certificate and the phone shows a one-time warning. Choose *Advanced → Proceed* (Android) or *Show Details → visit this website* (iPhone).
 4. Tap **Start camera**. The pairing window shows *Phone connected* within a second or two.
 
 On the phone page you can switch between front and back camera, turn on the flashlight, darken the screen, or pause. Guardian shows the phone's battery and warns you if it goes offline while armed (unplugged, covered, flat battery or lost Wi-Fi; Settings → Escalation). If the phone's browser is too old to open the camera, use the IP-camera-app route instead.
 
-The phone connects to port **8443** (`PHONE_PORT` in `backend/.env`). That port only serves the phone page and the phone's frames, each phone needs its own secret pairing link, and **Create new link** in the pairing window revokes an old one. Allow the port through the computer's firewall if phones cannot connect (Windows asks the first time).
+The phone connects to port **8443** (`PHONE_PORT` in `backend/.env`). That port only serves the phone page, the phone's frames and its audio, each phone needs its own secret pairing link, and **Create new link** in the pairing window revokes an old one. Allow the port through the computer's firewall if phones cannot connect (Windows asks the first time).
+
+### Talk, listen and loud sounds
+
+After **Start camera** the phone page also asks for the microphone, separately from the camera: if it is refused, the camera keeps working and the page shows *Microphone off* with a **Try again** button.
+
+- **Hold to talk** (Live page → Controls): hold the button with the mouse or a finger, or press and hold Space while it has focus, and speak. Your voice goes where the camera's warnings go (*Play warnings, the siren and your voice on* in the camera's settings). A phone plays it as you speak and shows *Owner is speaking*. This computer plays it as you speak through `paplay`, `aplay` or `ffplay`; without one of those (macOS without FFmpeg, Windows) it plays what you said when you let go. The text under the button says which applies. One person talks through a camera at a time, and that camera's spoken warnings wait until they finish. Each talk is logged, e.g. *Spoke through Porch for 8 s*.
+- **Listen** (phone cameras): plays what the phone's microphone hears, with a level meter. The phone only sends sound while someone listens, and its page says *the owner is listening* meanwhile.
+- **Loud sounds** (Settings → Detection): the phone reports how loud it is about four times a second. A sound counts as loud when it is well above what that place usually sounds like (the quiet end of the last minute) and above an absolute floor; *Sound sensitivity* sets how far above (30 dB at 5, 10 dB at 10). Guardian's own warnings, the siren and your voice don't count. *Log them with a picture* (the default) adds an event such as *Loud sound (-8 dB, usually -45 dB)* with the camera's picture, at most every 30 seconds per camera. *Log them and alert me* also records a clip and sends the alert with the picture while armed (at most every 5 minutes per camera). Nothing is spoken, since a sound alone doesn't say who is there.
+
+Browsers only allow the microphone on a secure page, so to talk, open the dashboard at `http://localhost:<port>` on the Guardian computer, or over https (a reverse proxy, a tunnel or a codespace). The camera tile shows a small microphone and level while a phone's microphone is live.
 
 ## How alarms escalate
 
@@ -188,7 +199,9 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 - **Phone page opens but the camera is blocked**: allow camera access for the page in the browser's site settings. Very old browsers can't use the camera at all; use the IP Webcam app route.
 - **Phone stops sending when the screen turns off**: keep the page open, use *Dark screen*, and set the screen timeout to the longest option.
 - **Warnings say "pre-written line, model unavailable"**: Ollama isn't running or has no model. Check Settings → Language model; the error explains what is missing.
-- **No sound**: Settings → Voice shows the speech engine. On Linux install `espeak-ng`; the siren needs `paplay`, `aplay` or `ffplay`.
+- **No sound**: Settings → Voice shows the speech engine. On Linux install `espeak-ng`; the siren and talking through this computer need `paplay`, `aplay` or `ffplay` (Settings → System shows which is used).
+- **Hold to talk says the microphone needs a secure page**: the dashboard was opened over plain http from another device. Use `http://localhost:<port>` on the Guardian computer, or https. If it says the browser refused the microphone, allow it with the icon next to the address.
+- **Listen is greyed out**: the phone's microphone is off. Tap **Try again** on the phone, or allow the microphone for the page in the phone browser's site settings.
 - **Clip won't play in the browser**: some Chromium builds lack H.264. Use Download, or Chrome/Edge/Firefox/Safari.
 - **Port 8000 is used by another program**: Guardian moves to the next free port and prints the address; set `PORT=` in `backend/.env` to choose one. Starting Guardian while it already runs just prints its address.
 - **macOS: "not authorized to capture video" or no webcam picture**: the first time Guardian starts with a webcam, macOS asks whether your terminal app may use the camera. Click OK. If you declined, turn the terminal app (Terminal, iTerm, …) on in System Settings → Privacy & Security → Camera and restart Guardian. Phone cameras work either way.
@@ -197,4 +210,6 @@ The API is documented at <http://localhost:8000/docs> while the server runs.
 
 By default the dashboard listens on `127.0.0.1` (this computer only) and has no password. If other devices can reach it (`HOST=0.0.0.0`, a reverse proxy or a tunnel), set `DASHBOARD_PASSWORD=` in `backend/.env`: browsers then get a sign-in page (scripts can use HTTP Basic auth with any user name). Behind an https reverse proxy or tunnel, also set `PUBLIC_URL=https://your-address` so phone pairing links use that address and phones can stream from outside your Wi-Fi.
 
-The phone port (8443) is reachable from your network but serves only the phone camera page. Every other path, including the dashboard, the API and the live video, returns 404 there, and sending video requires a phone's secret pairing link. Set `PHONE_PORT=0` if you don't use phone cameras.
+The phone port (8443) is reachable from your network but serves only the phone camera page. Every other path, including the dashboard, the API and the live video, returns 404 there, and sending video or audio requires a phone's secret pairing link. Set `PHONE_PORT=0` if you don't use phone cameras.
+
+Talk and listen accept connections only from the dashboard's own pages, so other websites open in your browser can't use a camera's microphone or speaker. Anyone who can open the dashboard can, which is another reason to set `DASHBOARD_PASSWORD` when other devices can reach it.

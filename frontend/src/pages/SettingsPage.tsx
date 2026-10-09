@@ -424,6 +424,18 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
           <Slider label="Trust after recognition" value={d.draft.insider_grace_seconds} min={0} max={300} step={5} format={(v) => `${v} s`} onChange={(v) => d.set('insider_grace_seconds', v)} hint="Keeps trusting an insider who turns away from the camera" />
         </div>
       )}
+      <div className="grid gap-5 border-t border-zinc-800 pt-4 sm:grid-cols-2">
+        <Field label="Loud sounds" hint="Heard by the microphones of phone cameras. Alerts also record a clip and alert you while armed. Nothing is spoken to whoever made the sound.">
+          <select className="input" value={d.draft.sound_alerts} onChange={(e) => d.set('sound_alerts', e.target.value as Settings['detection']['sound_alerts'])}>
+            <option value="off">Ignore</option>
+            <option value="log">Log them with a picture</option>
+            <option value="alert">Log them and alert me while armed</option>
+          </select>
+        </Field>
+        {d.draft.sound_alerts !== 'off' && (
+          <Slider label="Sound sensitivity" value={d.draft.sound_sensitivity} min={1} max={10} format={(v) => `${v} of 10`} onChange={(v) => d.set('sound_sensitivity', v)} hint={`Counts sounds ${50 - 4 * d.draft.sound_sensitivity} dB or more above what that place usually sounds like. Higher catches quieter sounds.`} />
+        )}
+      </div>
     </Section>
   )
 }
@@ -793,6 +805,7 @@ function SystemSection() {
         <Stat label="Recordings" value={`${formatBytes(s.recordings_bytes)} · ${s.recording_encoder}`} />
         <Stat label="Speech" value={s.voice.available ? s.voice.engine : s.voice.available === false ? 'Not available' : 'Checking…'} warn={s.voice.available === false} />
         <Stat label="Siren player" value={s.siren.available ? s.siren.player : 'Not available'} warn={!s.siren.available} />
+        <Stat label="Talk on this computer" value={!s.talk.mode ? 'No audio player' : `${s.talk.player} · ${s.talk.mode === 'live' ? 'as you speak' : 'when you let go'}`} warn={!s.talk.mode} />
         <Stat label="Face models" value={s.faces.state} warn={s.faces.state === 'error'} />
         <Stat label="Platform" value={`${s.platform} · Python ${s.python}`} />
         <Stat label="Phone cameras" value={!s.phone.enabled ? 'Turned off' : s.phone.public_url || `https://${s.phone.addresses[0] ?? 'this computer'}:${s.phone.port}`} />

@@ -6,7 +6,8 @@ on while any camera wants it, and the same line requested by several cameras
 at once (e.g. during a panic) is only spoken once.
 
 CameraSpeaker sends a camera's warnings to the places configured for it: this
-computer, the phone the camera runs on, or both.
+computer, the phone the camera runs on, or both. While someone talks through
+the camera (talk_service), its warnings wait.
 """
 import threading
 import time
@@ -16,6 +17,11 @@ from services.siren_service import siren_service
 from services.tts_service import tts_service
 
 DEDUPE_SECONDS = 8
+
+
+def speech_seconds(text: str, rate: int) -> float:
+    """Roughly how long a line takes to say at `rate` words per minute."""
+    return len(text.split()) * 60 / max(rate, 1) + 1.0
 
 
 class ServerAudio:
@@ -53,19 +59,23 @@ server_audio = ServerAudio()
 
 class CameraSpeaker:
     def __init__(self, camera_id: str, outputs: Callable[[], str], phone_send: Callable[[dict], bool] | None = None,
-                 server: ServerAudio = server_audio):
+                 server: ServerAudio = server_audio, paused: Callable[[], bool] = lambda: False):
         self.camera_id = camera_id
         self._outputs = outputs  # "server" | "device" | "both"
         self._phone_send = phone_send
         self.server = server
+        self.paused = paused  # someone is talking through this camera
         self._siren_requested = False
         self._phone_siren_until = 0.0
+        self._speaking_until = 0.0
 
     def _targets(self) -> tuple[bool, bool]:
         out = self._outputs()
         return out in ("server", "both"), out in ("device", "both") and self._phone_send is not None
 
     def say(self, text: str, rate: int, interrupt: bool = False) -> bool:
+        if self.paused():
+            return False
         server, device = self._targets()
         spoken = False
         if device:
@@ -73,7 +83,14 @@ class CameraSpeaker:
             spoken = self._phone_send({"type": "speak", "text": text, "rate": round(rate / 165, 2)}) or spoken
         if server:
             spoken = self.server.say(text, rate, interrupt) or spoken
+        if spoken:
+            self._speaking_until = time.time() + speech_seconds(text, rate)
         return spoken
+
+    @property
+    def sounding(self) -> bool:
+        """A warning or the siren is playing, which this camera's microphone hears too."""
+        return self.siren_active or time.time() < self._speaking_until
 
     @property
     def siren_active(self) -> bool:

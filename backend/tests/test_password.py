@@ -84,9 +84,9 @@ def test_phones_and_health_check_need_no_password(client):
 
 
 @pytest.mark.parametrize("path, open_", [
-    ("/phone", True), ("/api/phone/frame", True), ("/api/health", True),
+    ("/phone", True), ("/api/phone/frame", True), ("/api/phone/audio", True), ("/api/health", True),
     ("/phone/../index.html", False), ("/api/phone/../../index.html", False), ("/phonebook", False),
-    ("/api/healthz", False), ("/api/status", False), ("/", False),
+    ("/api/healthz", False), ("/api/status", False), ("/", False), ("/ws/talk/cam1", False), ("/ws/listen/cam1", False),
 ])
 def test_only_exact_phone_paths_are_open(path, open_):
     assert DashboardPassword.is_open(path) is open_

@@ -19,12 +19,26 @@ export interface PhoneInfo {
   last_contact: number | null
 }
 
+export interface CameraAudio {
+  /** Where warnings, the siren and the owner's voice play */
+  output: AudioOutput
+  /** The phone's audio link is connected (it can play the owner's voice) */
+  link: boolean
+  /** The phone's microphone is live */
+  mic: boolean
+  /** The microphone's latest peak level in dBFS */
+  level_db: number | null
+  /** Someone is talking through this camera */
+  talking: boolean
+  listeners: number
+}
+
 export interface CameraStatus {
   id: string
   name: string
   source: string
   kind: SourceKind
-  audio: AudioOutput
+  audio: CameraAudio
   active_index: number | null
   connected: boolean
   error: string | null
@@ -63,10 +77,17 @@ export interface Status {
   ai: AIStatus
   faces: FaceStatus
   phone: { enabled: boolean; port: number }
+  /** How this computer plays the owner's voice: as they speak, after they let go, or not at all */
+  talk: TalkPlayer
   schedule: ScheduleStatus
   server_time: number
   /** The Guardian computer's time zone, which schedule times are in; utc_offset like "+01:00". */
   time_zone: { name: string; utc_offset: string }
+}
+
+export interface TalkPlayer {
+  mode: 'live' | 'after' | null
+  player: string | null
 }
 
 export interface ScheduleStatus {
@@ -230,6 +251,8 @@ export interface Settings {
     face_match_threshold: number
     identify_seconds: number
     insider_grace_seconds: number
+    sound_alerts: 'off' | 'log' | 'alert'
+    sound_sensitivity: number
   }
   escalation: {
     level2_after: number
@@ -327,6 +350,7 @@ export interface SystemInfo {
   recordings_bytes: number
   voice: Status['voice']
   siren: Status['siren']
+  talk: TalkPlayer
   faces: FaceStatus
   ai: AIStatus
   notifications: { discord: boolean; telegram: boolean; ntfy: boolean; webhook: boolean; email: boolean; any: boolean; email_to: string | null }
@@ -376,6 +400,7 @@ const query = (params: Record<string, string | number | undefined>) => {
 }
 
 const cam = (id: string) => `/api/cameras/${encodeURIComponent(id)}`
+const socketUrl = (path: string) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`
 
 export const api = {
   status: () => request<Status>('/api/status'),
@@ -400,8 +425,9 @@ export const api = {
   cameraFaces: (id: string) => request<{ faces: LiveFace[] }>(`${cam(id)}/faces`),
   snapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg`,
   rawSnapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg?raw=1&t=${Date.now()}`,
-  streamUrl: (id: string) =>
-    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/stream/${encodeURIComponent(id)}`,
+  streamUrl: (id: string) => socketUrl(`/ws/stream/${encodeURIComponent(id)}`),
+  talkUrl: (id: string) => socketUrl(`/ws/talk/${encodeURIComponent(id)}`),
+  listenUrl: (id: string) => socketUrl(`/ws/listen/${encodeURIComponent(id)}`),
 
   events: (filters: EventFilters, limit = 50, offset = 0) =>
     request<EventPage>(`/api/events${query({ ...filters, limit, offset })}`),

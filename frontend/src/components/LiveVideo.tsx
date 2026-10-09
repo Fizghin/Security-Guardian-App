@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Battery, BatteryCharging, Camera, Download, Maximize2, Smartphone, VideoOff } from 'lucide-react'
+import { Battery, BatteryCharging, Camera, Download, Maximize2, Mic, Smartphone, VideoOff } from 'lucide-react'
 import { api, type CameraStatus } from '../api'
 import { cx } from '../lib/cx'
 import { LEVELS } from '../lib/format'
@@ -123,6 +123,14 @@ export default function LiveVideo({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {camera.audio.mic && (
+            <span className="mr-1 flex items-center gap-1 text-zinc-300" title={`Microphone live${camera.audio.level_db != null ? ` · ${Math.round(camera.audio.level_db)} dB` : ''}`}>
+              <Mic className="h-3.5 w-3.5" />
+              <span className="h-1 w-4 overflow-hidden rounded-full bg-white/20">
+                <span className="block h-full rounded-full bg-emerald-400" style={{ width: `${Math.max(0, Math.min(100, (((camera.audio.level_db ?? -60) + 60) / 60) * 100))}%` }} />
+              </span>
+            </span>
+          )}
           {phone?.battery != null && (
             <span className={cx('mr-1 flex items-center gap-0.5 tabular-nums', phone.battery <= 20 && !phone.charging ? 'text-amber-400' : 'text-zinc-300')}>
               {phone.charging ? <BatteryCharging className="h-3.5 w-3.5" /> : <Battery className="h-3.5 w-3.5" />}

@@ -137,7 +137,7 @@ class CameraBrain:
         cfg = self.settings.get()
         ai = cfg.ai
         # Disarmed means nothing is spoken, greetings included.
-        if not ai.greet_insiders or not cfg.armed or self.incident_start is not None:
+        if not ai.greet_insiders or not cfg.armed or self.incident_start is not None or self.speaker.paused():
             return
         last = self._greeted.get(name)
         if last is not None and now - last < ai.greet_cooldown_minutes * 60:
@@ -225,6 +225,8 @@ class CameraBrain:
 
         if self.manual:
             return  # the panic warning is spoken by the CameraManager on every camera
+        if self.speaker.paused():
+            return  # the owner is talking through this camera; warnings carry on when they stop
         someone_there = self.last_seen is not None and now - self.last_seen <= PRESENCE_SECONDS
         due = now - self.last_ai_time >= voice_cooldown(cfg.ai.persistence)
         if not someone_there or not (level > self._spoken_level or due):
@@ -325,9 +327,10 @@ class CameraBrain:
         return self.speaker.say(text, ai.voice_rate, interrupt=True)
 
     def _on_recording_finished(self, info: dict) -> None:
-        label = {"panic": "panic", "test": "test", "intruder": "intrusion"}.get(info["reason"], info["reason"])
-        self._log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip (peak level {info['max_level']})",
-                  recording=info["file"])
+        label = {"panic": "panic", "test": "test", "intruder": "intrusion", "sound": "loud sound"}.get(info["reason"],
+                                                                                                     info["reason"])
+        peak = f" (peak level {info['max_level']})" if info["max_level"] else ""
+        self._log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip{peak}", recording=info["file"])
         esc = self.settings.get().escalation
         if info["max_level"] >= esc.alert_at_level or info["reason"] == "panic":
             camera = self.camera_name()

@@ -6,6 +6,8 @@ Each enabled camera runs as a CameraUnit with its own background loop:
   frame -> motion check -> person detection -> face evidence -> tracker
         -> CameraBrain (escalation) -> annotated frame (live view + recorder)
 
+A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts).
+
 The CameraManager creates and removes units as settings change, and handles
 what applies to the whole system: arming, the panic button, resetting, the
 operator speaking through a camera, and preparing voice lines while idle.
@@ -34,7 +36,9 @@ from services.recording_service import Recorder, recording_library
 from services.schedule_service import AppliedEvent, last_event, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
+from services.sound_service import SoundMonitor
 from services.sources import CaptureSource, parse_source
+from services.talk_service import audio_hub
 from services.tracker import FaceEvidence, Tracker
 from services.zones import keep_in_zones, shape_changed
 
@@ -89,7 +93,7 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
 
 class CameraUnit:
     def __init__(self, cfg: CameraConfig, settings=settings_service, detector=detection_service, faces=face_service,
-                 notifier=notification_service, events=event_service, hub=phone_hub):
+                 notifier=notification_service, events=event_service, hub=phone_hub, audio=audio_hub):
         self.id = cfg.id
         self.settings, self.detector, self.faces = settings, detector, faces
         self.notifier, self.events, self.hub = notifier, events, hub
@@ -97,11 +101,16 @@ class CameraUnit:
         self.source = self._make_source(cfg)
         self.tracker = Tracker()
         self.recorder = Recorder(cfg.id, self.name)
+        self.audio = audio.relay(cfg.id)
         phone_send = (lambda cmd: hub.send(self.id, cmd)) if cfg.is_phone else None
-        self.speaker = CameraSpeaker(cfg.id, lambda: self.cfg.audio, phone_send)
+        self.speaker = CameraSpeaker(cfg.id, lambda: self.cfg.audio, phone_send, paused=lambda: self.audio.talking)
         self.brain = CameraBrain(cfg.id, self.name, self.speaker, self.recorder, settings=settings,
                                  notifier=notifier, events=events, prune=lambda days: prune_media(days, events))
         self.brain.snapshot = self.snapshot
+        self.sound = SoundMonitor(self.name, self.recorder, settings=settings, notifier=notifier, events=events)
+        self.sound.snapshot = self.snapshot
+        self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
+        self.sound.incident_active = lambda: self.brain.incident_active
 
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
@@ -226,6 +235,7 @@ class CameraUnit:
             now = time.time()
             if now - last_tick >= 0.25:
                 self.brain.tick(now)
+                self._check_sound(now)
                 last_tick = now
             if now - last_health >= 1.0:
                 self._check_health(now)
@@ -317,6 +327,14 @@ class CameraUnit:
             if self.notifier.send_alert(f"Camera offline: {self.name()}", msg, "HIGH"):
                 self.events.log("ALERT", f"Owner alerted: {msg}", "HIGH", camera=self.name())
 
+    def _check_sound(self, now: float) -> None:
+        try:
+            for when, db in self.audio.take_levels():
+                self.sound.feed(db, when)
+            self.sound.tick(now)
+        except Exception as exc:  # keep the camera running
+            print(f"[camera:{self.id}] Sound check failed: {exc}")
+
     def _check_zones(self) -> None:
         mismatch = self.zones_mismatch()
         if mismatch and not self._zones_warned:
@@ -334,7 +352,7 @@ class CameraUnit:
             "name": cfg.name,
             "source": cfg.source,
             "kind": kind,
-            "audio": cfg.audio,
+            "audio": {"output": cfg.audio, **self.audio.status()},
             **src,
             "pipeline": {"fps": self.fps if src["connected"] else 0.0, "motion": self.motion,
                          "test_seconds_left": max(0, int(self.simulate_until - time.time())), "error": self.error},

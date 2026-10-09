@@ -74,6 +74,9 @@ class DetectionSettings(BaseModel):
     # How long a newly seen person may stay unidentified before being treated as a stranger.
     identify_seconds: float = Field(2.0, ge=0, le=10)
     insider_grace_seconds: int = Field(20, ge=0, le=300)
+    # Loud sounds heard by phone cameras: logged with a picture, or also recorded and alerted while armed.
+    sound_alerts: Literal["off", "log", "alert"] = "log"
+    sound_sensitivity: int = Field(5, ge=1, le=10)
 
 
 class EscalationSettings(BaseModel):

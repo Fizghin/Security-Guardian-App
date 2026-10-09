@@ -54,6 +54,8 @@ DASHBOARD_PASSWORD = env_str("DASHBOARD_PASSWORD")
 PUBLIC_URL = env_str("PUBLIC_URL").rstrip("/")
 # Phones reach Guardian on the LAN port, through PUBLIC_URL, or both.
 PHONES_ENABLED = PHONE_PORT > 0 or bool(PUBLIC_URL)
+# The Vite dev server (npm run dev), which proxies to the backend.
+DEV_ORIGINS = ("http://localhost:2500", "http://127.0.0.1:2500")
 
 
 def migrate_legacy_data() -> None:

@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
 import { api, type CameraStatus, type SecurityEvent, type Status } from '../api'
 import EventRow, { EventPicture } from '../components/EventRow'
+import LiveAudio from '../components/LiveAudio'
 import LiveVideo from '../components/LiveVideo'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Button, Card, Empty } from '../components/ui'
@@ -38,7 +39,7 @@ const SOURCE_LABEL: Record<string, string> = {
 }
 
 const speakerText = (c: CameraStatus) =>
-  c.kind !== 'phone' || c.audio === 'server' ? 'this computer' : c.audio === 'both' ? 'the phone and this computer' : 'the phone'
+  c.kind !== 'phone' || c.audio.output === 'server' ? 'this computer' : c.audio.output === 'both' ? 'the phone and this computer' : 'the phone'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -54,7 +55,7 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
   const lv = LEVELS[level]
   const phone = camera.kind === 'phone' ? camera.phone : undefined
   const speakerOk =
-    camera.kind === 'phone' && camera.audio !== 'server' ? !!phone?.online : status.voice.available !== false
+    camera.kind === 'phone' && camera.audio.output !== 'server' ? !!phone?.online : status.voice.available !== false
 
   return (
     <Card title={camera.name}>
@@ -105,7 +106,8 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
         <Row label="Speaker">
           <span className={speakerOk ? 'text-zinc-400' : 'text-amber-400'}>
             {speakerText(camera)}
-            {!speakerOk && (camera.kind === 'phone' && camera.audio !== 'server' ? ' (phone offline)' : ' (no speech engine)')}
+            {!speakerOk && (camera.kind === 'phone' && camera.audio.output !== 'server' ? ' (phone offline)' : ' (no speech engine)')}
+            {camera.audio.talking && <span className="block text-xs text-blue-300">Someone is talking through it</span>}
           </span>
         </Row>
         {phone && (
@@ -115,6 +117,18 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
               {phone.battery != null && ` · ${phone.battery}%${phone.charging ? ' charging' : ''}`}
               {phone.camera && ` · ${phone.camera} camera`}
             </span>
+          </Row>
+        )}
+        {phone && (
+          <Row label="Microphone">
+            {camera.audio.mic ? (
+              <span className="tabular-nums text-zinc-300">
+                Live{camera.audio.level_db != null && ` · ${Math.round(camera.audio.level_db)} dB`}
+                {camera.audio.listeners > 0 && ` · ${camera.audio.listeners} listening`}
+              </span>
+            ) : (
+              <span className="text-zinc-400">Off</span>
+            )}
           </Row>
         )}
       </div>
@@ -199,6 +213,7 @@ function Controls({ camera, status }: { camera: CameraStatus; status: Status }) 
           {testing ? `Test running · ${camera.pipeline.test_seconds_left}s` : 'Run test intrusion'}
         </Button>
       </div>
+      <LiveAudio key={camera.id} camera={camera} player={status.talk} />
     </Card>
   )
 }

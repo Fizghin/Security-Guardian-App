@@ -64,6 +64,8 @@ def test_certificate_covers_lan_addresses(tmp_path, monkeypatch):
     ("/api/status", 8443, False),
     ("/", 8443, False),
     ("/ws/stream/cam1", 8443, False),
+    ("/ws/talk/cam1", 8443, False),
+    ("/ws/listen/cam1", 8443, False),
     ("/api/status", 8000, True),
 ])
 def test_phone_port_only_serves_phone_routes(path, port, allowed):

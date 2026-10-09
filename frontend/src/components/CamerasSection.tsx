@@ -354,7 +354,7 @@ function AddCameraDialog({ open, count, onClose, onAdded }: { open: boolean; cou
       {step === 'phone' && (
         <div className="space-y-4">
           {nameField}
-          <Field label="Play warnings and the siren on">
+          <Field label="Play warnings, the siren and your voice on">
             <select className="input" value={audio} onChange={(e) => setAudio(e.target.value as AudioOutput)}>
               {AUDIO_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -489,7 +489,7 @@ function EditCameraDialog({ camera, onClose, onSaved }: { camera: CameraConfig |
           <input className="input" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
         </Field>
         {phone ? (
-          <Field label="Play warnings and the siren on">
+          <Field label="Play warnings, the siren and your voice on">
             <select className="input" value={audio} onChange={(e) => setAudio(e.target.value as AudioOutput)}>
               {AUDIO_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>

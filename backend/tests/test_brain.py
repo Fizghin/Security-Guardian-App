@@ -64,6 +64,10 @@ class FakeSpeaker:
         self.said = []
         self.siren_active = False
         self.siren_calls = []
+        self.talking = False
+
+    def paused(self):
+        return self.talking
 
     def say(self, text, rate=165, interrupt=False):
         self.said.append(text)
@@ -250,6 +254,17 @@ def test_voice_repeats_according_to_persistence(brain):
     assert len(brain.ai.requests) == 2
     advance(brain, 1.5, [person()])
     assert len(brain.ai.requests) == 3
+
+
+def test_warnings_wait_while_the_owner_talks(brain):
+    brain.speaker.talking = True
+    brain.process([person()])
+    advance(brain, 6, [person()])
+    assert brain.threat_level == 2 and brain.recorder.starts == ["intruder"], "everything but the voice carries on"
+    assert brain.ai.requests == [] and brain.speaker.said == []
+    brain.speaker.talking = False
+    advance(brain, 0.5, [person()])
+    assert [ctx.level for ctx in brain.ai.requests] == [2], "the current level's warning once they stop"
 
 
 def test_late_warning_after_person_left_is_dropped(brain):

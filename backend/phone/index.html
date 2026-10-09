@@ -50,12 +50,17 @@
       <button id="pause">Pause</button>
     </div>
     <div id="state" class="status" style="margin-top:12px"><span class="dot"></span><span id="stateText">Not started</span></div>
+    <div id="micRow" class="status" style="margin-top:8px;display:none"><span class="dot"></span><span id="micText" style="flex:1">Microphone off</span>
+      <button id="micBtn" style="display:none;min-height:36px;padding:6px 12px">Try again</button></div>
+    <div id="micHint" class="muted" style="display:none;margin-top:4px">Allow the microphone for this page in the browser's
+      settings, then tap Try again. The camera works without it.</div>
     <div class="stats">
       <div><b id="fps">0</b><span class="muted">frames/s</span></div>
       <div><b id="battery">–</b><span class="muted">battery</span></div>
       <div><b id="res">–</b><span class="muted">picture</span></div>
     </div>
     <div id="msg" class="msg"></div>
+    <div id="voice" class="msg">Owner is speaking</div>
   </div>
 
   <div class="card muted">
@@ -63,7 +68,8 @@
     <ol>
       <li>Keep it plugged in and this page open. The screen can stay dark.</li>
       <li>If the picture stops when the screen turns off, set the screen timeout to the longest option.</li>
-      <li>Warnings and the siren play from this phone's speaker. Turn the volume up.</li>
+      <li>Warnings, the siren and the owner's voice play from this phone's speaker. Turn the volume up.</li>
+      <li>The microphone lets Guardian notice loud sounds. The owner can listen in; this page shows when they do.</li>
     </ol>
   </div>
 </main>
@@ -151,6 +157,161 @@
 
   function sirenOff() {
     if (siren) { try { siren.stop(); } catch (e) {} siren = null; }
+  }
+
+  // ---- microphone and the owner's voice ----------------------------------------------
+  // One WebSocket carries the microphone level (for loud-sound alerts), the microphone itself while
+  // the owner listens, and the owner's voice while they talk. Audio is 16-bit mono at 16 kHz.
+  var RATE = 16000, CHUNK = 1600;
+  var mic = null, micSource = null, micNode = null, micState = "off", link = null, linkRetry = 1000;
+  var listening = false, peak = 0, peakSamples = 0, pcm = null, pcmLen = 0, dsSum = 0, dsCount = 0, dsPos = 0;
+  var playAt = 0, voiceUntil = 0, buffers16k = true;
+
+  function updateMic() {
+    var text = micState === "unsupported" ? "No microphone in this browser" :
+      micState === "asking" ? "Asking for the microphone…" : "Microphone off";
+    if (micState === "on") text = paused ? "Microphone paused" : listening ? "Microphone on: the owner is listening" : "Microphone on";
+    $("micRow").className = "status " + (micState === "on" && !paused ? "ok" : "warn");
+    $("micText").textContent = text;
+    $("micBtn").style.display = $("micHint").style.display = micState === "denied" ? "" : "none";
+  }
+
+  function startMic() {
+    var md = navigator.mediaDevices;
+    if (!audioCtx || !md || !md.getUserMedia || !(audioCtx.createScriptProcessor || audioCtx.createJavaScriptNode)) {
+      micState = "unsupported";
+      updateMic();
+      return;
+    }
+    if (micState === "asking" || micState === "on") return;
+    micState = "asking";
+    updateMic();
+    // Asked for apart from the camera, so the camera still works when the microphone is refused.
+    // No automatic gain: levels must stay comparable for loud-sound alerts.
+    md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } }).then(function (s) {
+      if (micNode) micNode.disconnect();  // from before the microphone was lost
+      mic = s;
+      micSource = audioCtx.createMediaStreamSource(s);
+      micNode = (audioCtx.createScriptProcessor || audioCtx.createJavaScriptNode).call(audioCtx, 4096, 1, 1);
+      micNode.onaudioprocess = function (e) {
+        var out = e.outputBuffer.getChannelData(0);
+        for (var i = 0; i < out.length; i++) out[i] = 0;  // the microphone is not played here
+        capture(e.inputBuffer.getChannelData(0));
+      };
+      micSource.connect(micNode);
+      micNode.connect(audioCtx.destination);
+      s.getAudioTracks()[0].onended = function () { mic = null; micState = "denied"; updateMic(); };
+      micState = "on";
+      updateMic();
+    }).catch(function () {
+      micState = "denied";
+      updateMic();
+    });
+  }
+
+  function capture(input) {
+    if (!running || paused || !link || link.readyState !== 1) return;
+    var i, v;
+    for (i = 0; i < input.length; i++) {
+      v = input[i] < 0 ? -input[i] : input[i];
+      if (v > peak) peak = v;
+    }
+    peakSamples += input.length;
+    if (peakSamples >= audioCtx.sampleRate / 4) {
+      v = peak > 0 ? Math.max(-100, 20 * Math.log(peak) / Math.LN10) : -100;
+      link.send(JSON.stringify({ type: "level", db: Math.round(v * 10) / 10 }));
+      peak = peakSamples = 0;
+    }
+    if (listening) downsample(input);
+  }
+
+  function downsample(input) {
+    var ratio = audioCtx.sampleRate / RATE, i, v;
+    for (i = 0; i < input.length; i++) {
+      dsSum += input[i];
+      dsCount++;
+      if (++dsPos >= ratio) {  // average the samples that make up one 16 kHz sample
+        dsPos -= ratio;
+        v = dsSum / dsCount;
+        dsSum = dsCount = 0;
+        if (!pcm) { pcm = new Int16Array(CHUNK); pcmLen = 0; }
+        pcm[pcmLen++] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+        if (pcmLen === CHUNK) { link.send(pcm.buffer); pcm = null; }
+      }
+    }
+  }
+
+  function voiceBuffer(samples) {
+    var n = samples.length, buffer = null, data, i;
+    if (buffers16k) {
+      try { buffer = audioCtx.createBuffer(1, n, RATE); } catch (e) { buffers16k = false; }
+    }
+    if (buffer) {
+      data = buffer.getChannelData(0);
+      for (i = 0; i < n; i++) data[i] = samples[i] / 32768;
+      return buffer;
+    }
+    // Older Safari only makes buffers at 22 kHz and up: stretch the voice to the context's rate
+    var ratio = audioCtx.sampleRate / RATE, m = Math.floor(n * ratio), x, j, next;
+    buffer = audioCtx.createBuffer(1, m, audioCtx.sampleRate);
+    data = buffer.getChannelData(0);
+    for (i = 0; i < m; i++) {
+      x = i / ratio;
+      j = Math.floor(x);
+      next = j + 1 < n ? samples[j + 1] : samples[j];
+      data[i] = (samples[j] + (next - samples[j]) * (x - j)) / 32768;
+    }
+    return buffer;
+  }
+
+  function playVoice(data) {
+    if (!audioCtx) return;
+    var now = audioCtx.currentTime;
+    if (playAt < now) playAt = now + 0.08;  // starting again: keep ~80 ms in hand for uneven arrival
+    else if (playAt > now + 1) return;      // fallen behind: skip a piece to catch up
+    var node = audioCtx.createBufferSource();
+    node.buffer = voiceBuffer(new Int16Array(data));
+    node.connect(audioCtx.destination);
+    if (node.start) node.start(playAt); else node.noteOn(playAt);
+    playAt += node.buffer.duration;
+    voiceUntil = Date.now() + (playAt - now) * 1000 + 300;
+    showVoice();
+  }
+
+  function showVoice() {
+    $("voice").style.display = Date.now() < voiceUntil ? "block" : "none";
+  }
+
+  function connectLink() {
+    if (!window.WebSocket || !running) return;
+    var ws;
+    try {
+      ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+        "/api/phone/audio?k=" + encodeURIComponent(token));
+    } catch (e) { return; }
+    ws.binaryType = "arraybuffer";
+    link = ws;
+    ws.onopen = function () { linkRetry = 1000; };
+    ws.onmessage = function (e) {
+      if (typeof e.data !== "string") { playVoice(e.data); return; }
+      var m = null;
+      try { m = JSON.parse(e.data); } catch (err) {}
+      if (m && m.type === "listen") {
+        listening = !!m.on;
+        pcm = null;
+        updateMic();
+      }
+    };
+    ws.onclose = function (e) {
+      if (link === ws) link = null;
+      listening = false;
+      updateMic();
+      if (e.code === 4000) showMsg("This camera page is open somewhere else too; sound goes to that one.", true);
+      // 4401: the pairing link is no longer valid, which sending frames reports
+      if (!running || e.code === 4401 || e.code === 4000) return;
+      setTimeout(connectLink, linkRetry);
+      linkRetry = Math.min(30000, linkRetry * 2);
+    };
   }
 
   function handle(commands) {
@@ -252,6 +413,8 @@
   function stop(reason) {
     running = false;
     stopStream();
+    if (link) link.close();
+    if (mic) mic.getTracks().forEach(function (t) { t.stop(); });
     setState("bad", "Stopped");
     showMsg(reason, true);
     $("start").disabled = true;
@@ -267,8 +430,12 @@
       $("subtitle").textContent = "Watching for Guardian. Keep this page open.";
       $("start").style.display = "none";
       $("controls").style.display = "";
+      $("micRow").style.display = "";
       requestWakeLock();
       showMsg("", false);
+      connectLink();
+      startMic();
+      setInterval(showVoice, 250);
     }).catch(function (err) {
       $("start").disabled = false;
       setState("bad", "Camera not available");
@@ -290,8 +457,13 @@
   $("pause").onclick = function () {
     paused = !paused;
     $("pause").textContent = paused ? "Resume" : "Pause";
-    setState(paused ? "warn" : "ok", paused ? "Paused: Guardian sees nothing" : "Streaming to Guardian");
+    setState(paused ? "warn" : "ok", paused ? "Paused: Guardian sees and hears nothing" : "Streaming to Guardian");
+    updateMic();
     heartbeat();
+  };
+  $("micBtn").onclick = function () {
+    unlockAudio();
+    startMic();
   };
   $("dimBtn").onclick = function () { $("dim").style.display = "flex"; };
   $("dim").onclick = function () { $("dim").style.display = "none"; };
