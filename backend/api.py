@@ -20,7 +20,8 @@ from services.face_service import FaceError, face_service
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
-from services.settings_service import PHONE_SOURCE, SettingsError, new_token, settings_service
+from services.schedule_service import time_zone
+from services.settings_service import PHONE_SOURCE, NotificationSettings, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
 from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
@@ -65,6 +66,7 @@ def status():
         "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT},
         "schedule": camera_manager.schedule_status(),
         "server_time": time.time(),
+        "time_zone": time_zone(),
     }
 
 
@@ -118,6 +120,7 @@ class CameraUpdate(BaseModel):
     enabled: bool | None = None
     audio: str | None = None
     zones: list[list[list[float]]] | None = None
+    zones_aspect: float | None = None  # width / height of the picture the zones were drawn on
 
 
 def _camera_view(cfg) -> dict:
@@ -149,6 +152,9 @@ def add_camera(req: CameraCreate):
 @router.patch("/cameras/{camera_id}")
 def update_camera(camera_id: str, req: CameraUpdate):
     changes = req.model_dump(exclude_none=True)
+    if "zones" in changes and "zones_aspect" not in changes:  # assume they were drawn on the live picture
+        unit = camera_manager.units.get(camera_id)
+        changes["zones_aspect"] = unit.picture_aspect() if unit else None
     try:
         cam = settings_service.update_camera(camera_id, changes)
     except KeyError:
@@ -389,9 +395,10 @@ def export_events(type: str = "", severity: str = "", since: str = "", until: st
 
 
 @router.get("/events/{event_id}/snapshot.jpg")
-def event_snapshot(event_id: int):
+def event_snapshot(event_id: int, v: str = ""):
+    """v: the picture's file name from the event. Each file gets its own URL, which browsers may cache."""
     path = event_service.snapshot_path(event_id)
-    if path is None:
+    if path is None or (v and v != path.name):
         raise HTTPException(404, "This event has no picture")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
@@ -533,14 +540,21 @@ def patch_settings(patch: dict):
     if isinstance(patch.get("ai"), dict):
         patch["ai"].pop("api_key_set", None)
     if isinstance(patch.get("notifications"), dict):
-        for key in [k for k in patch["notifications"] if k.endswith("_set")]:
-            patch["notifications"].pop(key)
+        notifications = patch["notifications"]
+        notifications.pop("configured", None)
+        for key in [k for k in notifications if k.endswith("_set")]:
+            notifications.pop(key)
+        # "" removes a secret; a stray space typed into its field leaves it alone
+        for key in NotificationSettings.SECRETS:
+            value = notifications.get(key)
+            if isinstance(value, str) and value and not value.strip():
+                notifications.pop(key)
     try:
         settings_service.update(patch)
     except SettingsError as exc:
         raise HTTPException(422, str(exc))
     if "schedule" in patch:
-        camera_manager.check_schedule()  # apply an edited schedule now rather than at the next check
+        camera_manager.check_schedule()  # act on an edited schedule now rather than at the next check
     return settings_service.public()
 
 
@@ -602,9 +616,14 @@ async def notifications_test():
     return {"results": await run_in_threadpool(notification_service.send_test)}
 
 
-@router.get("/notifications/telegram/chats")
-async def telegram_chats(token: str = ""):
+class TelegramChatsRequest(BaseModel):
+    token: str = ""  # a token typed in but not saved yet; empty uses the saved one
+
+
+@router.post("/notifications/telegram/chats")
+async def telegram_chats(body: TelegramChatsRequest):
+    # A POST, so the token stays out of URLs that proxies and tunnels log
     try:
-        return {"chats": await run_in_threadpool(notification_service.telegram_chats, token)}
+        return {"chats": await run_in_threadpool(notification_service.telegram_chats, body.token)}
     except ChannelError as exc:
         raise HTTPException(502, str(exc))

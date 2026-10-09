@@ -41,8 +41,13 @@ class FakeRecorder:
         self.stops = 0
         self.on_finished = None
 
+    @property
+    def file(self):
+        return "clip.mp4" if self.active else None
+
     def start(self, reason, level=0):
-        self.starts.append(reason)
+        if not self.active:  # while recording, the clip just continues
+            self.starts.append(reason)
         self.active = True
         return "clip.mp4"
 
@@ -91,10 +96,13 @@ class FakeNotifier:
 class FakeEvents:
     def __init__(self):
         self.entries = []
+        self.pictures = []
+        self.clips = []
 
     def log(self, event_type, description, severity="INFO", recording=None, camera=None, snapshot=None):
         self.entries.append((event_type, severity, camera))
-        self.pictures = getattr(self, "pictures", []) + [(event_type, snapshot)]
+        self.pictures.append((event_type, snapshot))
+        self.clips.append((event_type, recording))
 
     def types(self):
         return [t for t, _, _ in self.entries]
@@ -264,6 +272,17 @@ def test_greets_insiders_when_enabled(brain):
     assert len(brain.speaker.said) == 2
 
 
+def test_no_greetings_while_disarmed(brain):
+    # Disarming promises that nothing is spoken.
+    brain.settings.update({"armed": False, "ai": {"greet_insiders": True}})
+    brain.process([person("known", "Alex", face=True)])
+    assert brain.speaker.said == []
+    assert "GREETING" not in brain.events.types() and "INSIDER" in brain.events.types()
+    brain.settings.update({"armed": True})
+    advance(brain, 1, [person("known", "Alex", face=True)])
+    assert len(brain.speaker.said) == 1
+
+
 def test_clip_is_sent_for_serious_incidents(brain):
     brain._on_recording_finished({"file": "a.mp4", "path": "/tmp/a.mp4", "duration": 12, "max_level": 3,
                                   "reason": "intruder"})
@@ -285,3 +304,15 @@ def test_key_events_keep_a_picture(brain):
     pictures = dict(brain.events.pictures)
     assert pictures["DETECTION"] == b"jpeg" and pictures["ESCALATION"] == b"jpeg"
     assert pictures.get("VOICE") is None and pictures.get("RECORDING") is None
+
+
+def test_pictures_link_to_the_clip_recording_them(brain):
+    brain.snapshot = lambda: b"jpeg"
+    brain.process([person()])
+    advance(brain, 5, [person()])  # level 2 starts the recording
+    advance(brain, 5, [person()])  # level 3 alerts the owner
+    brain.process([person("known", "Alex", face=True), person()])
+    clips = [(t, c) for t, c in brain.events.clips if t != "VOICE"]
+    assert clips[:4] == [("DETECTION", None), ("ESCALATION", "clip.mp4"), ("RECORDING", "clip.mp4"),
+                         ("ESCALATION", "clip.mp4")]
+    assert ("ALERT", "clip.mp4") in clips and ("INSIDER", "clip.mp4") in clips

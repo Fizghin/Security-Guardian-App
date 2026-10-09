@@ -1,20 +1,28 @@
-import { useState } from 'react'
 import { Film } from 'lucide-react'
 import { api, type SecurityEvent } from '../api'
 import { eventLabel, formatDateTime, formatShortDate, formatTime, isToday, SEVERITY_STYLE } from '../lib/format'
 import { cx } from '../lib/cx'
+import { useStatus } from '../lib/status'
 import { Badge, Button, Modal } from './ui'
+
+/** A clip that is still being recorded can only be played once it is saved. */
+function useStillRecording(file: string | null) {
+  const { status } = useStatus()
+  return !!file && !!status?.cameras.some((c) => c.recording.active && c.recording.file === file)
+}
 
 export default function EventRow({
   event,
   onOpenClip,
+  onOpenPicture,
   compact,
 }: {
   event: SecurityEvent
   onOpenClip?: (file: string) => void
+  onOpenPicture?: (event: SecurityEvent) => void
   compact?: boolean
 }) {
-  const [viewing, setViewing] = useState(false)
+  const stillRecording = useStillRecording(event.recording)
   const time = (
     <time
       className="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-zinc-500"
@@ -24,50 +32,34 @@ export default function EventRow({
       {isToday(event.timestamp) ? formatTime(event.timestamp) : formatShortDate(event.timestamp)}
     </time>
   )
-  const clip = event.recording && onOpenClip && (
+  const clip =
+    event.recording &&
+    onOpenClip &&
+    (stillRecording ? (
+      <span className="flex shrink-0 items-center gap-1.5 px-1.5 py-0.5 text-xs text-red-400" title="Still recording. The clip can be played once it is saved.">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+        {compact ? 'Rec' : 'Recording'}
+      </span>
+    ) : (
+      <button
+        type="button"
+        onClick={() => onOpenClip(event.recording!)}
+        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-blue-400 hover:bg-zinc-800 hover:text-blue-300"
+        title="Play clip"
+      >
+        <Film className="h-3.5 w-3.5" />
+        Clip
+      </button>
+    ))
+  const picture = event.snapshot && onOpenPicture && (
     <button
       type="button"
-      onClick={() => onOpenClip(event.recording!)}
-      className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-blue-400 hover:bg-zinc-800 hover:text-blue-300"
-      title="Play clip"
-    >
-      <Film className="h-3.5 w-3.5" />
-      Clip
-    </button>
-  )
-  const picture = event.snapshot && (
-    <button
-      type="button"
-      onClick={() => setViewing(true)}
+      onClick={() => onOpenPicture(event)}
       className={cx('shrink-0 overflow-hidden rounded border border-zinc-800 bg-black hover:border-zinc-500', compact ? 'h-9 w-16' : 'h-10 w-[4.5rem]')}
       title="Show picture"
     >
-      <img src={api.eventSnapshotUrl(event.id)} alt="" loading="lazy" className="h-full w-full object-cover" />
+      <img src={api.eventSnapshotUrl(event)} alt="" loading="lazy" className="h-full w-full object-cover" />
     </button>
-  )
-  const lightbox = event.snapshot && (
-    <Modal
-      open={viewing}
-      onClose={() => setViewing(false)}
-      wide
-      title={`${eventLabel(event.event_type)}${event.camera ? ` · ${event.camera}` : ''} · ${formatDateTime(event.timestamp)}`}
-      footer={
-        event.recording && onOpenClip ? (
-          <Button
-            icon={<Film className="h-4 w-4" />}
-            onClick={() => {
-              setViewing(false)
-              onOpenClip(event.recording!)
-            }}
-          >
-            Play clip
-          </Button>
-        ) : undefined
-      }
-    >
-      <img src={api.eventSnapshotUrl(event.id)} alt={event.description} className="mx-auto max-h-[70vh] w-auto rounded" />
-      <p className="mt-3 text-sm text-zinc-300">{event.description}</p>
-    </Modal>
   )
 
   if (compact) {
@@ -78,12 +70,13 @@ export default function EventRow({
             {time}
             <Badge className={SEVERITY_STYLE[event.severity]}>{eventLabel(event.event_type)}</Badge>
             {event.camera && <span className="truncate text-[11px] text-zinc-500">{event.camera}</span>}
-            <span className="ml-auto">{clip}</span>
           </div>
-          <p className="mt-1 line-clamp-2 text-zinc-300">{event.description}</p>
+          <div className="mt-1 flex items-start gap-2">
+            <p className="line-clamp-2 min-w-0 flex-1 text-zinc-300">{event.description}</p>
+            {clip}
+          </div>
         </div>
         {picture}
-        {lightbox}
       </li>
     )
   }
@@ -100,7 +93,52 @@ export default function EventRow({
         {clip}
         {picture}
       </div>
-      {lightbox}
     </li>
+  )
+}
+
+/**
+ * The larger view of an event's picture. Pages keep the event being viewed in their own state, so
+ * the view stays open when newer events push its row out of the polled list.
+ */
+export function EventPicture({
+  event,
+  onClose,
+  onOpenClip,
+}: {
+  event: SecurityEvent | null
+  onClose: () => void
+  onOpenClip?: (file: string) => void
+}) {
+  const stillRecording = useStillRecording(event?.recording ?? null)
+  if (!event?.snapshot) return null
+  const clip = event.recording
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      wide
+      title={`${eventLabel(event.event_type)}${event.camera ? ` · ${event.camera}` : ''} · ${formatDateTime(event.timestamp)}`}
+      footer={
+        clip && onOpenClip ? (
+          stillRecording ? (
+            <span className="self-center text-xs text-zinc-400">Still recording. The clip can be played once it is saved.</span>
+          ) : (
+            <Button
+              icon={<Film className="h-4 w-4" />}
+              onClick={() => {
+                onClose()
+                onOpenClip(clip)
+              }}
+            >
+              Play clip
+            </Button>
+          )
+        ) : undefined
+      }
+    >
+      <img src={api.eventSnapshotUrl(event)} alt={event.description} className="mx-auto max-h-[70vh] w-auto rounded" />
+      <p className="mt-3 text-sm text-zinc-300">{event.description}</p>
+    </Modal>
   )
 }

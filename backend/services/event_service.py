@@ -1,9 +1,9 @@
 import csv
 import io
 import threading
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-
 from pathlib import Path
 
 from sqlalchemy import func
@@ -12,6 +12,7 @@ from config import SNAPSHOTS_DIR
 from models.database import SecurityEvent, SessionLocal, to_iso, utcnow
 
 SEVERITIES = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
+ORPHAN_SECONDS = 3600  # a picture no event refers to is deleted once it is this old
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -51,6 +52,8 @@ class EventService:
             except Exception as exc:
                 db.rollback()
                 print(f"[event] Failed to store event: {exc}")
+                if picture:
+                    (self.snapshot_dir / picture).unlink(missing_ok=True)  # no event refers to it
             finally:
                 db.close()
 
@@ -77,22 +80,34 @@ class EventService:
         return path if path.is_file() else None
 
     def prune_snapshots(self, retention_days: int) -> int:
-        """Delete pictures older than the recording retention; their events stay."""
-        if retention_days <= 0:
-            return 0
-        cutoff = utcnow() - timedelta(days=retention_days)
+        """Delete pictures older than the recording retention (0 keeps them); their events stay.
+        Pictures no event refers to, e.g. after a failed database write, are deleted too."""
+        names: list[str] = []
         db = SessionLocal()
         try:
-            rows = db.query(SecurityEvent).filter(SecurityEvent.snapshot.isnot(None),
-                                                  SecurityEvent.timestamp < cutoff).all()
-            for row in rows:
-                if Path(row.snapshot).name == row.snapshot:
-                    (self.snapshot_dir / row.snapshot).unlink(missing_ok=True)
-                row.snapshot = None
-            db.commit()
-            return len(rows)
+            with_picture = SecurityEvent.snapshot.isnot(None)
+            if retention_days > 0:
+                cutoff = utcnow() - timedelta(days=retention_days)
+                for row in db.query(SecurityEvent).filter(with_picture, SecurityEvent.timestamp < cutoff).all():
+                    names.append(row.snapshot)
+                    row.snapshot = None
+                db.commit()
+            referenced = {name for (name,) in db.query(SecurityEvent.snapshot).filter(with_picture)}
         finally:
             db.close()
+        for name in names:
+            if Path(name).name == name:
+                (self.snapshot_dir / name).unlink(missing_ok=True)
+        orphans = 0
+        stale = time.time() - ORPHAN_SECONDS  # never a picture whose event is being stored right now
+        for picture in self.snapshot_dir.glob("*.jpg"):
+            try:
+                if picture.name not in referenced and picture.stat().st_mtime < stale:
+                    picture.unlink()
+                    orphans += 1
+            except OSError:
+                pass  # already gone, e.g. the log was cleared meanwhile
+        return len(names) + orphans
 
     def _filtered(self, db, event_type=None, severity=None, since=None, until=None, search=None, camera=None):
         q = db.query(SecurityEvent)
@@ -193,14 +208,16 @@ class EventService:
             db.close()
 
     def clear(self) -> int:
-        db = SessionLocal()
-        try:
-            n = db.query(SecurityEvent).delete()
-            db.commit()
-        finally:
-            db.close()
-        for picture in self.snapshot_dir.glob("*.jpg"):
-            picture.unlink(missing_ok=True)
+        # Under the lock: an event logged in between would keep a picture whose file is deleted here.
+        with self._lock:
+            db = SessionLocal()
+            try:
+                n = db.query(SecurityEvent).delete()
+                db.commit()
+            finally:
+                db.close()
+            for picture in self.snapshot_dir.glob("*.jpg"):
+                picture.unlink(missing_ok=True)
         return n
 
 

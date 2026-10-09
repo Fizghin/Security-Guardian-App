@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pytest
 
+from services import recording_service
 from services.recording_service import Recorder, RecordingLibrary
 
 
@@ -67,3 +68,34 @@ def test_cannot_delete_clip_in_progress(recorder, library):
         library.delete(name)
     recorder.stop(immediate=True)
     library.delete(name)
+
+
+def test_clean_up_never_takes_a_starting_clip_for_a_leftover(library, monkeypatch):
+    library.ffmpeg = None
+
+    class Writer:  # the encoder; clean-up after another camera's clip runs just as the file appears
+        codec, playable = "mp4v", False
+
+        def __init__(self, path, size):
+            self.path = path
+            path.write_bytes(b"video")
+            library.prune(30)
+
+        def write(self, frame):
+            pass
+
+        def close(self):
+            return self.path.exists()
+
+    monkeypatch.setattr(recording_service, "_OpenCVWriter", Writer)
+    recorder = Recorder("porch", lambda: "Porch", library)
+    recorder.start_sampler(lambda: np.zeros((240, 320, 3), np.uint8))
+    try:
+        time.sleep(0.2)
+        name = recorder.start("test")
+        assert recorder.file == name
+        time.sleep(0.3)
+        recorder.stop(immediate=True)
+    finally:
+        recorder.shutdown()
+    assert recorder.file is None and (library.dir / name).exists()

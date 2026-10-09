@@ -10,14 +10,17 @@ The CameraManager creates and removes units as settings change, and handles
 what applies to the whole system: arming, the panic button, resetting, the
 operator speaking through a camera, and preparing voice lines while idle.
 """
+import json
 import os
 import threading
 import time
 from datetime import datetime
+from typing import Callable
 
 import cv2
 import numpy as np
 
+from config import SCHEDULE_STATE_FILE
 from models.domain import Detection
 from services.ai_service import WarningContext, ai_service
 from services.audio_service import CameraSpeaker
@@ -28,12 +31,12 @@ from services.face_service import face_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
-from services.schedule_service import armed_at, next_change
+from services.schedule_service import AppliedEvent, last_event, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
 from services.sources import CaptureSource, parse_source
 from services.tracker import FaceEvidence, Tracker
-from services.zones import keep_in_zones
+from services.zones import keep_in_zones, shape_changed
 
 # Avoid oversubscribing the CPU: OpenCV, PyTorch and the language model all default to one
 # thread per core, and fighting over cores makes every one of them slower.
@@ -42,6 +45,7 @@ cv2.setNumThreads(max(1, (os.cpu_count() or 4) // 2))
 STREAM_MAX_WIDTH = 960
 HEARTBEAT_SECONDS = 2.0  # run detection at least this often even without motion
 BOX_HOLD_SECONDS = 1.5
+PRUNE_SECONDS = 3600  # old recordings and event pictures are deleted at least this often
 
 RED, GREEN, AMBER, GREY, BLUE = (40, 40, 220), (90, 180, 60), (0, 170, 240), (150, 150, 150), (230, 160, 60)
 ZONE = (230, 230, 160)  # detection zone outlines, light cyan
@@ -116,6 +120,7 @@ class CameraUnit:
         self._ever_online = False
         self._offline_since: float | None = None
         self._offline_alerted = False
+        self._zones_warned = False
 
     # ---- configuration --------------------------------------------------------
     @property
@@ -199,6 +204,17 @@ class CameraUnit:
     def connected(self) -> bool:
         return self.source.status()["connected"]
 
+    def picture_aspect(self) -> float | None:
+        """The latest picture's width / height, or None before the first picture."""
+        w, h = self.source.width, self.source.height
+        return w / h if w and h else None
+
+    def zones_mismatch(self) -> bool:
+        """The picture changed shape since the zones were drawn (e.g. a phone turned on its side), so
+        they now cover different places."""
+        cfg = self.cfg
+        return bool(cfg.zones) and shape_changed(cfg.zones_aspect, self.picture_aspect())
+
     # ---- loop ------------------------------------------------------------------------
     def _run(self) -> None:
         prev_gray = None
@@ -213,6 +229,7 @@ class CameraUnit:
                 last_tick = now
             if now - last_health >= 1.0:
                 self._check_health(now)
+                self._check_zones()
                 last_health = now
 
             frame, frame_id, _ = self.source.get_frame()
@@ -300,6 +317,14 @@ class CameraUnit:
             if self.notifier.send_alert(f"Camera offline: {self.name()}", msg, "HIGH"):
                 self.events.log("ALERT", f"Owner alerted: {msg}", "HIGH", camera=self.name())
 
+    def _check_zones(self) -> None:
+        mismatch = self.zones_mismatch()
+        if mismatch and not self._zones_warned:
+            self.events.log("SYSTEM", "The picture changed shape since the detection zones were drawn, so they now "
+                            "cover different places. Redraw them in Settings → Cameras → Zones.", "MEDIUM",
+                            camera=self.name())
+        self._zones_warned = mismatch
+
     def status(self) -> dict:
         cfg = self.cfg
         src = self.source.status()
@@ -315,6 +340,7 @@ class CameraUnit:
                          "test_seconds_left": max(0, int(self.simulate_until - time.time())), "error": self.error},
             **self.brain.status(),
             "recording": self.recorder.status(),
+            "zones_mismatch": self.zones_mismatch(),
         }
 
 
@@ -325,7 +351,7 @@ def prune_media(retention_days: int, events=event_service) -> int:
 
 class CameraManager:
     def __init__(self, settings=settings_service, ai=ai_service, notifier=notification_service,
-                 events=event_service, hub=phone_hub):
+                 events=event_service, hub=phone_hub, schedule_file=SCHEDULE_STATE_FILE):
         self.settings, self.ai, self.notifier, self.events, self.hub = settings, ai, notifier, events, hub
         self.units: dict[str, CameraUnit] = {}
         self._lock = threading.RLock()
@@ -333,7 +359,11 @@ class CameraManager:
         self._idle_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._schedule_lock = threading.Lock()
-        self._schedule_seen: tuple[str, bool] | None = None  # (schedule, its answer) last acted on
+        self._schedule_applied = AppliedEvent(schedule_file)
+        self._schedule_rules: str | None = None  # the periods last checked, to notice edits
+        self.schedule_waiting = False  # a scheduled disarm is waiting for an alarm to end
+        self.prune: Callable[[int], int] = lambda days: prune_media(days, self.events)
+        self._pruned_at = time.monotonic()  # the server prunes once when it starts
 
     # ---- lifecycle ---------------------------------------------------------------
     def start(self) -> None:
@@ -405,7 +435,8 @@ class CameraManager:
         cameras = ", ".join(u.name() for u in units) or "no cameras"
         msg = f"Panic button pressed. Recording on {cameras}; the siren is sounding."
         if self.notifier.send_alert("Alarm raised", msg, "CRITICAL", picture):
-            self.events.log("ALERT", f"Owner alerted: {msg}", "CRITICAL", snapshot=picture)
+            self.events.log("ALERT", f"Owner alerted: {msg}", "CRITICAL", snapshot=picture,
+                            recording=first.recorder.file if first else None)
         if not units:
             return
         ctx = units[0].brain.context(4, manual=True)
@@ -433,6 +464,7 @@ class CameraManager:
         siren_service.stop()
         if was_active or was_panic:
             self.events.log("RESET", "Alarm acknowledged from the dashboard", "INFO")
+        self.check_schedule()  # a scheduled disarm that waited for this alarm happens now
         return was_active or was_panic
 
     def speak(self, text: str, camera_id: str | None = None) -> bool:
@@ -461,35 +493,70 @@ class CameraManager:
 
     # ---- schedule -------------------------------------------------------------------
     def check_schedule(self, now: datetime | None = None) -> None:
-        """Arm or disarm when the schedule's answer changes, or when the schedule was edited.
-        Arming or disarming by hand in between therefore lasts until the next change."""
+        """Act on each schedule event once: arm where a period starts, disarm where the armed time ends.
+        Arming or disarming by hand lasts until the next event, also across restarts. Turning the
+        schedule on applies it at once; editing it acts only if that changes its answer for now."""
         with self._schedule_lock:
             schedule = self.settings.get().schedule
             if not schedule.enabled or not schedule.rules:
-                self._schedule_seen = None
+                self._schedule_applied.remember(None)
+                self._schedule_rules, self.schedule_waiting = None, False
                 return
-            seen = (schedule.model_dump_json(), armed_at(schedule.rules, now or datetime.now()))
-            if seen == self._schedule_seen:
+            now = (now or datetime.now()).astimezone()
+            event = last_event(schedule.rules, now)
+            if event is None:
                 return
-            self._schedule_seen = seen
-            if seen[1]:
-                self.set_armed(True, by="by schedule")
-            elif not self.panic_active:  # a raised alarm stays until it is reset
-                self.set_armed(False, by="by schedule")
+            rules = json.dumps([r.model_dump() for r in schedule.rules])
+            applied = self._schedule_applied.event
+            if applied is None or applied[0] > now:  # just turned on, or the clock was put back
+                due = True
+            elif self._schedule_rules not in (None, rules):  # edited
+                due = event[1] != applied[1]
+            else:
+                due = event[0] > applied[0]
+            if due and not event[1] and self.settings.get().armed and self.alarm_raised():
+                # A scheduled disarm never silences an alarm; it is tried again until the alarm ends
+                if not self.schedule_waiting:
+                    self.schedule_waiting = True
+                    self.events.log("SYSTEM", "Scheduled disarm waits until the alarm is reset or clears", "INFO")
+                return
+            self._schedule_rules, self.schedule_waiting = rules, False
+            self._schedule_applied.remember(event)
+            if due:
+                self.set_armed(event[1], by="by schedule")
+
+    def alarm_raised(self) -> bool:
+        """A panic, or an incident that has reached the level that alerts the owner."""
+        alert_at = self.settings.get().escalation.alert_at_level
+        return self.panic_active or any(u.brain.manual or u.brain.threat_level >= alert_at
+                                        for u in list(self.units.values()))
 
     def schedule_status(self, now: datetime | None = None) -> dict:
-        schedule = self.settings.get().schedule
+        cfg = self.settings.get()
+        schedule = cfg.schedule
         if not schedule.enabled or not schedule.rules:
-            return {"enabled": schedule.enabled, "active": None, "next_change": None}
-        now = now or datetime.now()
-        change = next_change(schedule.rules, now)
-        return {"enabled": True, "active": armed_at(schedule.rules, now),
-                "next_change": change.astimezone().isoformat() if change else None}
+            return {"enabled": schedule.enabled, "active": None, "next_change": None, "waiting": False}
+        now = (now or datetime.now()).astimezone()
+        event = last_event(schedule.rules, now)
+        change = next_change(schedule.rules, now, cfg.armed)
+        return {"enabled": True, "active": bool(event and event[1]),
+                "next_change": change.isoformat() if change else None, "waiting": self.schedule_waiting}
+
+    # ---- clean-up -------------------------------------------------------------------
+    def prune_old_media(self, now: float | None = None) -> None:
+        """Applies the retention period hourly. Saving a clip prunes too, but pictures of recognised
+        people and of incidents below the recording level build up without any clip."""
+        now = time.monotonic() if now is None else now
+        if now - self._pruned_at < PRUNE_SECONDS:
+            return
+        self._pruned_at = now
+        self.prune(self.settings.get().recording.retention_days)
 
     def _idle_loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self.check_schedule()
+                self.prune_old_media()
                 if self.settings.get().armed:
                     self.ai.keep_warm()
                 busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))

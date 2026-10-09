@@ -45,7 +45,9 @@ class SecurityEvent(Base):
             "severity": self.severity,
             "recording": self.recording,
             "camera": self.camera,
-            "snapshot": bool(self.snapshot),
+            # The picture's file name, so its URL changes with the file: ids start again at 1 after
+            # the log is cleared, and a browser must not show a deleted picture it cached.
+            "snapshot": self.snapshot or None,
         }
 
 

@@ -1,3 +1,5 @@
+import type { ScheduleStatus } from '../api'
+
 export function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -36,7 +38,9 @@ const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 const shortDateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
 const hourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
-const weekdayTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+// Wall-clock formats: they show a time as written, whatever the browser's time zone
+const wallHourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+const wallWeekdayTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 
 export const formatTime = (iso: string) => timeFmt.format(new Date(iso))
 export const formatDateTime = (iso: string) => dateTimeFmt.format(new Date(iso))
@@ -44,10 +48,26 @@ export const formatDay = (iso: string) => dayFmt.format(new Date(iso))
 export const formatShortDate = (iso: string) => shortDateFmt.format(new Date(iso))
 export const formatHour = (iso: string) => hourFmt.format(new Date(iso))
 
-/** "07:00" when it is less than a day away, otherwise "Mon 22:00". */
+/**
+ * "07:00" when it is less than a day away, otherwise "Mon 22:00". The time is shown as the clock that
+ * wrote `iso` shows it (the Guardian computer's), not converted to the browser's time zone.
+ */
 export function formatUpcoming(iso: string, now = Date.now()): string {
-  const at = new Date(iso)
-  return at.getTime() - now < 20 * 3600 * 1000 ? hourFmt.format(at) : weekdayTimeFmt.format(at)
+  const wall = new Date(`${iso.slice(0, 19)}Z`)
+  return new Date(iso).getTime() - now < 20 * 3600 * 1000 ? wallHourFmt.format(wall) : wallWeekdayTimeFmt.format(wall)
+}
+
+/** What the schedule does next, for the header (short) and Settings (long), given the real armed state. */
+export function describeSchedule(schedule: ScheduleStatus | undefined, armed: boolean): { short: string | null; long: string } | null {
+  if (!schedule?.enabled || schedule.active == null) return null
+  if (schedule.waiting) {
+    return { short: 'Schedule: disarms when the alarm ends', long: 'Still armed: the scheduled disarm waits until the alarm is reset or clears.' }
+  }
+  const byHand = armed !== schedule.active
+  const state = `${armed ? 'Armed' : 'Disarmed'} by ${byHand ? 'hand' : 'the schedule'}`
+  if (!schedule.next_change) return { short: byHand ? state : null, long: `${state}.` }
+  const next = `${armed ? 'disarms' : 'arms'} ${formatUpcoming(schedule.next_change)}`
+  return { short: byHand ? `${state}; ${next}` : `Schedule: ${next}`, long: `${state}; ${next}.` }
 }
 
 export function isToday(iso: string): boolean {

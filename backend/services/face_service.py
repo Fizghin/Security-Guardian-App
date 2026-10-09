@@ -356,6 +356,39 @@ class FaceService:
         return len(self._gallery)
 
     # ---- live recognition --------------------------------------------------
+    @staticmethod
+    def _head_fit(face, box) -> float | None:
+        """How far a face is from where this person's head should be (the top middle of the box), in box
+        widths and heights. None when it is not in the upper half of the box."""
+        cx, cy = face[0] + face[2] / 2, face[1] + face[3] / 2
+        x1, y1, x2, y2 = box
+        w, h = max(1.0, x2 - x1), max(1.0, y2 - y1)
+        if not (x1 <= cx <= x2 and y1 <= cy <= y1 + h * 0.5):
+            return None
+        return abs(cx - (x1 + x2) / 2) / w + (cy - y1) / h
+
+    @classmethod
+    def _assign(cls, faces: list, detections: list[Detection], people) -> list[tuple[int, int]]:
+        """(face, person) pairs: one face per person and one person per face, best fits first. People
+        overlap, so a face is often inside several person boxes."""
+        fits = sorted((fit, f, i) for f, face in enumerate(faces) for i in people
+                      if (fit := cls._head_fit(face, detections[i].bbox)) is not None)
+        pairs, faces_used, people_done = [], set(), set()
+        for _, f, i in fits:
+            if f not in faces_used and i not in people_done:
+                pairs.append((f, i))
+                faces_used.add(f)
+                people_done.add(i)
+        return pairs
+
+    @staticmethod
+    def _same_face(a, b) -> bool:
+        """Two sightings of one face, e.g. the same face again in a crop, possibly cut off at its edge."""
+        def centre_in(p, q):
+            cx, cy = p[0] + p[2] / 2, p[1] + p[3] / 2
+            return q[0] <= cx <= q[0] + q[2] and q[1] <= cy <= q[1] + q[3]
+        return centre_in(a, b) or centre_in(b, a)
+
     def analyze(self, frame, detections: list[Detection], threshold: float) -> list[FaceEvidence]:
         """Face evidence for each person box (same order as detections)."""
         evidence = [FaceEvidence() for _ in detections]
@@ -363,25 +396,22 @@ class FaceService:
             return evidence
         fh, fw = frame.shape[:2]
         with self._lock:
-            # Pass 1: whole frame (at most 1280 px wide), faces assigned to the smallest
-            # person box that has the face in its upper half (people overlap).
+            # Pass 1: whole frame (at most 1280 px wide).
             scale = min(1.0, 1280 / fw)
             small = cv2.resize(frame, (int(fw * scale), int(fh * scale))) if scale < 1 else frame
+            seen = []
             for face in self._detect(small):
                 face = face.copy()
                 face[:14] /= scale
-                cx, cy = face[0] + face[2] / 2, face[1] + face[3] / 2
-                owners = [i for i, d in enumerate(detections)
-                          if d.bbox[0] <= cx <= d.bbox[2] and d.bbox[1] <= cy <= d.bbox[1] + (d.bbox[3] - d.bbox[1]) * 0.5]
-                if not owners:
-                    continue
-                i = min(owners, key=lambda k: (detections[k].bbox[2] - detections[k].bbox[0])
-                        * (detections[k].bbox[3] - detections[k].bbox[1]))
-                if not evidence[i].face_visible:
-                    evidence[i] = self._evidence(frame, face, threshold)
+                seen.append(face)
+            for f, i in self._assign(seen, detections, range(len(detections))):
+                evidence[i] = self._evidence(frame, seen[f], threshold)
 
             # Pass 2: people far from the camera. Their faces can be too small for pass 1,
-            # so look again in an enlarged crop of the head area.
+            # so look again in an enlarged crop of the head area. Next to someone else, that crop
+            # also shows their face: faces from pass 1 are skipped, and each new face goes to the
+            # one person it fits best, not to every crop it appears in.
+            found = []  # (face box in the frame, crop, face in the crop, enlargement)
             for i, d in enumerate(detections):
                 if evidence[i].face_visible:
                     continue
@@ -395,9 +425,19 @@ class FaceService:
                 up = min(3.0, max(1.0, 240 / max(1, cx2 - cx1)))
                 if up > 1.05:
                     crop = cv2.resize(crop, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
-                faces = self._detect(crop)
-                if faces:
-                    evidence[i] = self._evidence(crop, max(faces, key=lambda f: f[2] * f[3]), threshold, px_scale=up)
+                for face in self._detect(crop):
+                    box = [face[0] / up + cx1, face[1] / up + cy1, face[2] / up, face[3] / up]
+                    if any(self._same_face(box, other) for other in seen):
+                        continue
+                    same = next((k for k, c in enumerate(found) if self._same_face(box, c[0])), None)
+                    if same is None:
+                        found.append((box, crop, face, up))
+                    elif box[2] * box[3] > found[same][0][2] * found[same][0][3]:
+                        found[same] = (box, crop, face, up)  # the more complete view
+            waiting = [i for i, ev in enumerate(evidence) if not ev.face_visible]
+            for f, i in self._assign([c[0] for c in found], detections, waiting):
+                _, crop, face, up = found[f]
+                evidence[i] = self._evidence(crop, face, threshold, px_scale=up)
         return evidence
 
     def _evidence(self, img, face, threshold: float, px_scale: float = 1.0) -> FaceEvidence:

@@ -200,24 +200,29 @@ export function Segmented<T extends string | number>({
 export function Modal({
   open,
   onClose,
+  onEscape = onClose,
   title,
   children,
   footer,
   wide,
+  bodyClassName,
 }: {
   open: boolean
   onClose: () => void
+  /** What Escape does; closes by default. */
+  onEscape?: () => void
   title: ReactNode
   children: ReactNode
   footer?: ReactNode
   wide?: boolean
+  bodyClassName?: string
 }) {
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onEscape()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [open, onEscape])
 
   if (!open) return null
   return (
@@ -234,7 +239,7 @@ export function Modal({
             <X className="h-4 w-4" />
           </button>
         </header>
-        <div className="overflow-auto p-4">{children}</div>
+        <div className={cx('overflow-auto p-4', bodyClassName)}>{children}</div>
         {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-zinc-800 px-4 py-3">{footer}</footer>}
       </div>
     </div>

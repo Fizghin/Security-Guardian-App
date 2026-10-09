@@ -85,7 +85,10 @@ class CameraBrain:
         return self.incident_start is not None
 
     def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None) -> None:
-        picture = self.snapshot() if event_type in PICTURE_EVENTS else None
+        picture = None
+        if event_type in PICTURE_EVENTS:
+            picture = self.snapshot()
+            recording = recording or self.recorder.file  # the clip that shows this moment
         self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
                         snapshot=picture)
 
@@ -120,7 +123,7 @@ class CameraBrain:
                 if self.incident_start is None:
                     self._begin_incident(now, simulated=all(d.simulated for d in unknown))
                     who = "Unrecognised person" if len(unknown) == 1 else f"{len(unknown)} unrecognised people"
-                    self._log("DETECTION", f"{who} detected" + (" (test)" if self.simulated else ""), "LOW")
+                    self._log_level("DETECTION", f"{who} detected" + (" (test)" if self.simulated else ""), "LOW")
                 self.last_seen = now
             elif pending and self.incident_start is not None:
                 self.last_seen = now  # someone is still there while we work out who they are
@@ -131,8 +134,10 @@ class CameraBrain:
             self._update(self.clock() if now is None else now)
 
     def _maybe_greet(self, name: str, now: float) -> None:
-        ai = self.settings.get().ai
-        if not ai.greet_insiders or self.incident_start is not None:
+        cfg = self.settings.get()
+        ai = cfg.ai
+        # Disarmed means nothing is spoken, greetings included.
+        if not ai.greet_insiders or not cfg.armed or self.incident_start is not None:
             return
         last = self._greeted.get(name)
         if last is not None and now - last < ai.greet_cooldown_minutes * 60:
@@ -172,10 +177,26 @@ class CameraBrain:
             level = 1 + (elapsed >= esc.level2_after) + (elapsed >= esc.level3_after) + (elapsed >= esc.level4_after)
             if level > self.threat_level:
                 self.threat_level = level
-                self._log("ESCALATION", f"Threat level {level} ({LEVEL_NAMES[level]}) after {int(elapsed)}s",
-                          SEVERITY[level])
+                self._log_level("ESCALATION", f"Threat level {level} ({LEVEL_NAMES[level]}) after {int(elapsed)}s",
+                                SEVERITY[level])
         self._peak = max(self._peak, self.threat_level)
         self._countermeasures(now)
+
+    def _record(self) -> str | None:
+        """Starts or continues the clip once the level calls for it. Returns its name when it just started."""
+        if self.threat_level < self.settings.get().escalation.record_at_level and not self.manual:
+            return None
+        reason = "panic" if self.manual else ("test" if self.simulated else "intruder")
+        fresh = not self.recorder.active
+        name = self.recorder.start(reason, self.threat_level)
+        return name if fresh else None
+
+    def _log_level(self, event_type: str, description: str, severity: str) -> None:
+        """Logs reaching a level. A clip due at this level starts first, so the event's picture links to it."""
+        started = self._record()
+        self._log(event_type, description, severity)
+        if started:
+            self._log("RECORDING", "Recording started", recording=started)
 
     def _countermeasures(self, now: float) -> None:
         cfg = self.settings.get()
@@ -183,12 +204,9 @@ class CameraBrain:
         seconds = int(now - (self.incident_start or now))
         camera = self.camera_name()
 
-        if level >= esc.record_at_level or self.manual:
-            reason = "panic" if self.manual else ("test" if self.simulated else "intruder")
-            fresh = not self.recorder.active
-            name = self.recorder.start(reason, level)
-            if name and fresh:
-                self._log("RECORDING", "Recording started", recording=name)
+        started = self._record()
+        if started:
+            self._log("RECORDING", "Recording started", recording=started)
         self.recorder.note_level(level)
 
         # Panic alerts are sent once for the whole system by the CameraManager.

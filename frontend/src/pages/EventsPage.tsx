@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Download, ScrollText, Trash2 } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { api, SEVERITIES, type EventFilters } from '../api'
-import EventRow from '../components/EventRow'
+import { api, SEVERITIES, type EventFilters, type SecurityEvent } from '../api'
+import EventRow, { EventPicture } from '../components/EventRow'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Button, Card, ConfirmDialog, Empty, ErrorNote, Segmented } from '../components/ui'
 import { eventLabel, formatDay, formatHour, SEVERITY_COLOR } from '../lib/format'
@@ -26,6 +26,7 @@ export default function EventsPage() {
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
   const [clip, setClip] = useState<string | null>(null)
+  const [picture, setPicture] = useState<SecurityEvent | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
 
@@ -185,11 +186,12 @@ export default function EventsPage() {
           </Empty>
         ) : (
           <ul className="divide-y divide-zinc-800/80">
-            {events.data?.items.map((e) => <EventRow key={e.id} event={e} onOpenClip={setClip} />)}
+            {events.data?.items.map((e) => <EventRow key={e.id} event={e} onOpenClip={setClip} onOpenPicture={setPicture} />)}
           </ul>
         )}
       </Card>
 
+      <EventPicture event={picture} onClose={() => setPicture(null)} onOpenClip={setClip} />
       <RecordingPlayer key={clip ?? ''} file={clip} onClose={() => setClip(null)} />
       <ConfirmDialog
         open={confirmClear}

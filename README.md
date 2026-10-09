@@ -11,7 +11,7 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
-- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
+- **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider management, settings and system diagnostics. Arm/disarm, panic button, talk-through-speaker and a one-click test intrusion.
 - Monitoring runs in the background whether or not the dashboard is open.
 
 ## Requirements
@@ -121,11 +121,15 @@ Timings, which levels record, alert and sound the siren, and the voice's persona
 
 ### Detection zones
 
-Settings → Cameras → **Zones** lets you outline the areas of a camera's picture that matter, for example your garden or driveway but not the pavement behind it. Only people standing inside a zone count (the point where their feet are, so someone walking behind a wall doesn't count just because their head shows above it). Click to place corners, click the first corner to finish, and drag corners to adjust; corners near the edge of the picture snap onto it. Zones show as thin outlines on the live picture. With no zones the whole picture counts.
+Settings → Cameras → **Zones** lets you outline the areas of a camera's picture that matter, for example your garden or driveway but not the pavement behind it. Only people standing inside a zone count (the point where their feet are, so someone walking behind a wall doesn't count just because their head shows above it). Click to place corners, click the first corner to finish, and drag corners to adjust; corners near the edge of the picture snap onto it. Escape cancels the zone you are drawing, and closing the editor with unsaved changes asks first. A zone's outline can't cross or touch itself, and a zone must cover at least 0.1% of the picture. Zones show as thin outlines on the live picture. With no zones the whole picture counts.
+
+Zones are stored relative to the picture, so they only fit a picture of the same shape. If a camera's picture changes shape after the zones were drawn, for example a phone camera turned on its side, the camera list and the zone editor warn you and the event log notes it once: redraw the zones.
 
 ### Arming schedule
 
-Settings → **Schedule** arms Guardian during the periods you set and disarms it outside them, for example every night 22:00–07:00, or on weekdays while you are at work. A period that ends earlier than it starts runs past midnight. Arming or disarming by hand lasts until the next scheduled change, and the schedule never switches off an alarm you raised. The header shows when it next arms or disarms.
+Settings → **Schedule** arms Guardian when each period you set starts and disarms it when the period ends, for example every night 22:00–07:00, or on weekdays while you are at work. A period that ends earlier than it starts runs past midnight; periods that touch or overlap disarm only when the last one ends. Times are in the Guardian computer's time zone (Settings shows its offset from UTC) and follow its clock when daylight saving time starts or ends.
+
+The schedule acts once at each start and end. Arming or disarming by hand lasts until the next start or end, also when Guardian restarts; a start or end that passed while Guardian was off is applied when it starts again. Turning the schedule on applies it at once, and editing it changes the armed state only when the edit changes what the schedule says for now. A scheduled disarm never switches off an alarm: during a panic, or while a camera's alarm has reached the level that alerts you, it waits until the alarm is reset or clears. The header shows when the schedule next arms or disarms, and says so when you armed or disarmed by hand.
 
 ## Insiders
 
@@ -136,9 +140,10 @@ How recognition decides (OpenCV YuNet + SFace, about 40 MB, downloaded on first 
 - People are tracked across frames and identified from several looks, not one frame. A clear match identifies someone at once; weaker matches need two looks.
 - A newly seen person is *being identified* for up to 2 seconds (Settings → Detection) before counting as a stranger, so a resident walking up is recognised before the system speaks. A clearly visible face that matches nobody is flagged straight away.
 - Small faces of people further away get a second, enlarged look. Blurry, tiny or turned faces only count as weak evidence, and a match that is nearly as close to another insider is treated as unknown rather than guessed.
+- When people stand close together, each face counts only for the one person whose head it fits best, so an insider's face never vouches for a stranger next to them who has turned away.
 - A recognised person who turns away keeps their identity while they stay in view.
 
-Turn on **Greet recognised people by name** (Settings → Voice) to have Guardian say "Welcome back, Sam" at most once per hour per person.
+Turn on **Greet recognised people by name** (Settings → Voice) to have Guardian say "Welcome back, Sam" at most once per hour per person, only while armed.
 
 ## Alerts
 
@@ -146,17 +151,19 @@ Settings → **Notifications** sends alerts with a picture when someone reaches 
 
 | Channel | Setup |
 |---|---|
-| **Telegram** | Create a bot with @BotFather, paste its token, send the bot a message, then press **Find chat**. Alerts arrive as photos. |
-| **ntfy** | Install the ntfy app, subscribe to a long, hard-to-guess topic (**Suggest** makes one) and paste its address. Free push notifications without an account; a self-hosted ntfy server works too. |
-| **Discord** | Paste a channel webhook URL. |
+| **Telegram** | Create a bot with @BotFather, paste its token, send the bot a message, then press **Find chat** and check that the name it shows is yours (anyone can message a bot). Alerts arrive as photos. |
+| **ntfy** | Install the ntfy app, subscribe to a long, hard-to-guess topic (**Suggest** makes one) and paste its address. Free push notifications without an account. A self-hosted ntfy server works too, but sends pictures only with `attachment-cache-dir` set in its `server.yml`; without it, alerts arrive as text and the event log says the picture was left out. |
+| **Discord** | Paste a channel webhook URL (it starts with `https://`). |
 | **E-mail** | Any SMTP account. For Gmail use an app password. |
 | **Webhook** | Guardian POSTs JSON (`title`, `message`, `severity`, `time`, `snapshot_jpeg_base64`) for Home Assistant, Node-RED, n8n and the like. |
 
-**Send test** shows the result for each channel. Tokens, passwords and webhook addresses are stored in `backend/storage/settings.json` and never sent back to the dashboard. They can also be preset in `backend/.env` (see `.env.template`).
+**Send test** sends a small test picture through every channel that is on, the same way real alerts go out, and shows the result for each one. On and Off show what is saved; a channel with edits says *Unsaved* until you press Save, and **Remove** clears a saved token or address when you save.
+
+Tokens, passwords and webhook addresses are stored in `backend/storage/settings.json` and never sent back to the dashboard. They can also be preset in `backend/.env` (see `.env.template`); an address there that isn't a valid web address is ignored with a warning when Guardian starts. Error messages from the receiving servers are shown without your tokens and addresses, and HTML error pages are left out.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted together with old recordings), `models/` and `settings.json` (changes made in the dashboard, which take priority over `.env`). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

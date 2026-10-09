@@ -47,6 +47,8 @@ export interface CameraStatus {
   last_message_time: number | null
   last_message_source: MessageSource | null
   recording: { active: boolean; file: string | null; started: number | null; stopping: boolean }
+  /** The picture changed shape since the zones were drawn (e.g. a phone turned on its side). */
+  zones_mismatch: boolean
 }
 
 export interface Status {
@@ -63,13 +65,18 @@ export interface Status {
   phone: { enabled: boolean; port: number }
   schedule: ScheduleStatus
   server_time: number
+  /** The Guardian computer's time zone, which schedule times are in; utc_offset like "+01:00". */
+  time_zone: { name: string; utc_offset: string }
 }
 
 export interface ScheduleStatus {
   enabled: boolean
   /** Whether the schedule wants Guardian armed right now (null when it is off). */
   active: boolean | null
+  /** When the schedule next changes the armed state, in the Guardian computer's local time. */
   next_change: string | null
+  /** A scheduled disarm is waiting for an alarm to be reset or clear. */
+  waiting: boolean
 }
 
 export interface ScheduleRule {
@@ -115,6 +122,8 @@ export interface CameraConfig {
   token?: string
   /** Areas where people count: polygons of [x, y] corners in 0..1. Empty = the whole picture. */
   zones: number[][][]
+  /** Width / height of the picture the zones were drawn on (null when unknown or no zones). */
+  zones_aspect: number | null
 }
 
 export interface SecurityEvent {
@@ -125,8 +134,8 @@ export interface SecurityEvent {
   severity: Severity
   recording: string | null
   camera: string | null
-  /** A picture of the moment is available from eventSnapshotUrl. */
-  snapshot: boolean
+  /** File name of the picture of the moment, shown with eventSnapshotUrl; null when there is none. */
+  snapshot: string | null
 }
 
 export interface EventPage {
@@ -263,7 +272,19 @@ export interface Settings {
     smtp_user: string
     smtp_password_set: boolean
     email_to: string
+    /** Channels the saved settings are complete for; the server decides, the same way it does when sending. */
+    configured: NotificationChannel[]
   }
+}
+
+export type NotificationChannel = 'discord' | 'telegram' | 'ntfy' | 'webhook' | 'email'
+
+export interface NotificationResult {
+  channel: NotificationChannel
+  ok: boolean
+  error: string | null
+  /** Set when the alert went out without part of it, e.g. a picture the server refused. */
+  note: string | null
 }
 
 /** Write-only values: the dashboard can set or clear them but never reads them back. */
@@ -366,7 +387,7 @@ export const api = {
   cameras: () => request<{ cameras: CameraConfig[]; phone: SystemInfo['phone'] }>('/api/cameras'),
   addCamera: (body: { name: string; source: string; audio?: AudioOutput }) =>
     request<CameraConfig>('/api/cameras', json('POST', body)),
-  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio' | 'zones'>>) =>
+  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio' | 'zones' | 'zones_aspect'>>) =>
     request<CameraConfig>(cam(id), json('PATCH', body)),
   deleteCamera: (id: string) => request<{ ok: boolean }>(cam(id), { method: 'DELETE' }),
   resetPhoneLink: (id: string) => request<CameraConfig>(`${cam(id)}/reset-link`, json('POST')),
@@ -392,7 +413,8 @@ export const api = {
   recordingUrl: (file: string, download = false) =>
     `/api/recordings/${encodeURIComponent(file)}${download ? '?download=true' : ''}`,
   thumbnailUrl: (file: string) => `/api/recordings/${encodeURIComponent(file)}/thumbnail`,
-  eventSnapshotUrl: (id: number) => `/api/events/${id}/snapshot.jpg`,
+  // The file name makes the URL unique per picture: ids start again at 1 after the log is cleared.
+  eventSnapshotUrl: (event: SecurityEvent) => `/api/events/${event.id}/snapshot.jpg?v=${encodeURIComponent(event.snapshot ?? '')}`,
   deleteRecording: (file: string) => request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(file)}`, { method: 'DELETE' }),
 
   insiders: () => request<InsiderList>('/api/insiders'),
@@ -422,8 +444,8 @@ export const api = {
   aiTest: (level: number, speak: boolean) => request<AITestResult>('/api/ai/test', json('POST', { level, speak })),
 
   system: () => request<SystemInfo>('/api/system'),
+  // POST, so a token typed in stays out of URLs that proxies and tunnels log
   telegramChats: (token = '') =>
-    request<{ chats: { id: string; name: string; type: string }[] }>(`/api/notifications/telegram/chats?token=${encodeURIComponent(token)}`),
-  testNotifications: () =>
-    request<{ results: { channel: string; ok: boolean; error: string | null }[] }>('/api/notifications/test', json('POST')),
+    request<{ chats: { id: string; name: string; type: string }[] }>('/api/notifications/telegram/chats', json('POST', { token })),
+  testNotifications: () => request<{ results: NotificationResult[] }>('/api/notifications/test', json('POST')),
 }

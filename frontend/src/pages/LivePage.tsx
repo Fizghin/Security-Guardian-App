@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
-import { api, type CameraStatus, type Status } from '../api'
-import EventRow from '../components/EventRow'
+import { api, type CameraStatus, type SecurityEvent, type Status } from '../api'
+import EventRow, { EventPicture } from '../components/EventRow'
 import LiveVideo from '../components/LiveVideo'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Button, Card, Empty } from '../components/ui'
@@ -207,6 +207,7 @@ export default function LivePage() {
   const { status } = useStatus()
   const { data: events } = usePoll(() => api.events({}, 15), 3000)
   const [clip, setClip] = useState<string | null>(null)
+  const [picture, setPicture] = useState<SecurityEvent | null>(null)
   const [selectedId, setSelectedId] = useState(() => store.get('live.camera'))
   const [layout, setLayout] = useState<'grid' | 'single'>(() => (store.get('live.layout') === 'single' ? 'single' : 'grid'))
 
@@ -302,12 +303,13 @@ export default function LivePage() {
             <Empty title="No events yet" />
           ) : (
             <ul className="max-h-[32rem] divide-y divide-zinc-800/80 overflow-y-auto">
-              {events?.items.map((e) => <EventRow key={e.id} event={e} compact onOpenClip={setClip} />)}
+              {events?.items.map((e) => <EventRow key={e.id} event={e} compact onOpenClip={setClip} onOpenPicture={setPicture} />)}
             </ul>
           )}
         </Card>
       </div>
 
+      <EventPicture event={picture} onClose={() => setPicture(null)} onOpenClip={setClip} />
       <RecordingPlayer key={clip ?? ''} file={clip} onClose={() => setClip(null)} />
     </div>
   )

@@ -33,6 +33,8 @@ def test_status_without_camera(client):
     assert s["threat_level"] == 0 and s["panic"] is False
     cam = s["cameras"][0]
     assert cam["id"] == "cam1" and cam["connected"] is False and cam["error"] == "Camera disabled"
+    assert s["schedule"] == {"enabled": False, "active": None, "next_change": None, "waiting": False}
+    assert s["time_zone"]["name"] and s["time_zone"]["utc_offset"][0] in "+-"
 
 
 def test_arm_disarm_is_logged(client):
@@ -99,6 +101,39 @@ def test_phone_camera_end_to_end(client, monkeypatch):
     assert client.patch(f"/api/cameras/{cam_id}", json={"name": "Porch"}).json()["name"] == "Porch"
     assert client.delete(f"/api/cameras/{cam_id}").status_code == 200
     assert client.get(f"/api/cameras/{cam_id}/snapshot.jpg").status_code == 404
+
+
+def test_zones_warn_when_the_picture_changes_shape(client, monkeypatch):
+    monkeypatch.setattr(api_module, "PHONES_ENABLED", True)
+    cam = client.post("/api/cameras", json={"name": "Hall", "source": "phone"}).json()
+    token, cam_id = cam["token"], cam["id"]
+    zone = [[0.05, 0.55], [0.95, 0.55], [0.95, 0.95], [0.05, 0.95]]
+    try:
+        client.post("/api/phone/frame", params={"k": token}, content=jpeg(360, 640))  # held upright
+        saved = client.patch(f"/api/cameras/{cam_id}", json={"zones": [zone]}).json()
+        assert saved["zones_aspect"] == pytest.approx(360 / 640), "drawn on the live picture"
+        assert camera(client, cam_id)["zones_mismatch"] is False
+
+        client.post("/api/phone/frame", params={"k": token}, content=jpeg(640, 360))  # turned on its side
+        assert camera(client, cam_id)["zones_mismatch"] is True
+        deadline = time.time() + 30  # checked by the camera's own loop, which may be loading the detector
+        while time.time() < deadline:
+            events = client.get("/api/events", params={"camera": "Hall"}).json()["items"]
+            if any("changed shape" in e["description"] for e in events):
+                break
+            time.sleep(0.2)
+        else:
+            pytest.fail("no event about the zones")
+
+        bow_tie = [[0.2, 0.2], [0.8, 0.8], [0.8, 0.2], [0.2, 0.8]]
+        r = client.patch(f"/api/cameras/{cam_id}", json={"zones": [bow_tie]})
+        assert r.status_code == 422 and "cross" in r.json()["detail"]
+
+        redrawn = client.patch(f"/api/cameras/{cam_id}", json={"zones": [zone], "zones_aspect": 640 / 360}).json()
+        assert redrawn["zones_aspect"] == pytest.approx(640 / 360)
+        assert camera(client, cam_id)["zones_mismatch"] is False
+    finally:
+        client.delete(f"/api/cameras/{cam_id}")
 
 
 def test_phone_cameras_refused_when_disabled(client):

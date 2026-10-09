@@ -12,10 +12,12 @@ import re
 import secrets
 import threading
 from typing import Callable, ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from config import SETTINGS_FILE, env_str
+from services.zones import clean_zone
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434"
 OPENAI_COMPAT_DEFAULT_URL = "http://localhost:1234/v1"  # LM Studio's default
@@ -38,29 +40,28 @@ class CameraConfig(BaseModel):
     audio: Literal["server", "device", "both"] = "server"
     # Areas where people count: polygons of [x, y] corners in 0..1. Empty = the whole picture.
     zones: list[list[list[float]]] = Field(default_factory=list)
+    # The picture's width / height when the zones were drawn, to notice when it changes shape.
+    zones_aspect: float | None = Field(None, ge=0.1, le=10)
 
     @field_validator("zones")
     @classmethod
     def _zones(cls, zones: list[list[list[float]]]):
         if len(zones) > 8:
             raise ValueError("At most 8 zones per camera")
-        for polygon in zones:
-            if not 3 <= len(polygon) <= 32:
-                raise ValueError("A zone needs 3 to 32 corners")
-            if any(len(p) != 2 or not (0 <= p[0] <= 1 and 0 <= p[1] <= 1) for p in polygon):
-                raise ValueError("Zone corners must lie inside the picture")
-        return [[[round(x, 4), round(y, 4)] for x, y in polygon] for polygon in zones]
+        return [clean_zone(polygon) for polygon in zones]
 
     @property
     def is_phone(self) -> bool:
         return self.source == PHONE_SOURCE
 
     @model_validator(mode="after")
-    def _phone_defaults(self):
+    def _defaults(self):
         if self.is_phone and not self.token:
             self.token = new_token()
         if not self.is_phone and self.audio != "server":
             self.audio = "server"  # only phones have a speaker Guardian can reach
+        if not self.zones:
+            self.zones_aspect = None
         return self
 
 
@@ -150,6 +151,24 @@ class ScheduleSettings(BaseModel):
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
 
 
+CHANNELS = ("discord", "telegram", "ntfy", "webhook", "email")
+# Address fields and the schemes they accept. Discord only ever hands out https:// webhooks.
+URL_FIELDS = {"discord_webhook": ("https",), "ntfy_url": ("https", "http"), "webhook_url": ("https", "http")}
+
+
+def url_problem(field: str, value: str) -> str | None:
+    """Why `value` is not usable for an address field, or None. Settings, .env and saved files all use this."""
+    if not value:
+        return None
+    schemes = URL_FIELDS[field]
+    try:
+        parts = urlsplit(value)
+        ok = parts.scheme in schemes and bool(parts.hostname)
+    except ValueError:
+        ok = False
+    return None if ok else f"must be a web address starting with {' or '.join(f'{s}://' for s in schemes)}"
+
+
 class NotificationSettings(BaseModel):
     discord_webhook: str = ""
     telegram_token: str = ""
@@ -171,12 +190,24 @@ class NotificationSettings(BaseModel):
     def _strip(cls, value):
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("discord_webhook", "ntfy_url", "webhook_url")
+    @field_validator(*URL_FIELDS)
     @classmethod
-    def _url(cls, value: str):
-        if value and not value.startswith(("https://", "http://")):
-            raise ValueError("must be a web address starting with https://")
+    def _url(cls, value: str, info):
+        problem = url_problem(info.field_name, value)
+        if problem:
+            raise ValueError(problem)
         return value
+
+    def configured(self) -> list[str]:
+        """Channels that have everything they need. The notifier and the dashboard both go by this."""
+        ready = {
+            "discord": bool(self.discord_webhook),
+            "telegram": bool(self.telegram_token and self.telegram_chat_id),
+            "ntfy": bool(self.ntfy_url),
+            "webhook": bool(self.webhook_url),
+            "email": bool(self.smtp_user and self.smtp_password and self.email_to),
+        }
+        return [c for c in CHANNELS if ready[c]]
 
 
 class Settings(BaseModel):
@@ -204,6 +235,19 @@ class Settings(BaseModel):
         return next((c for c in self.cameras if c.id == camera_id), None)
 
 
+def _env_url(field: str, *names: str) -> str:
+    """An address from .env. An unusable one is ignored with a warning, so a typo never stops Guardian from starting."""
+    for name in names:
+        value = env_str(name)
+        if value:
+            problem = url_problem(field, value)
+            if problem:
+                print(f"[settings] Ignoring {name} in backend/.env: it {problem}")
+                return ""
+            return value
+    return ""
+
+
 def _env_defaults() -> dict:
     provider = env_str("AI_PROVIDER", "ollama").lower()
     if provider not in ("ollama", "openai"):
@@ -225,12 +269,12 @@ def _env_defaults() -> dict:
             "api_key": env_str("OPENAI_API_KEY"),
         },
         "notifications": {
-            "discord_webhook": env_str("DISCORD_WEBHOOK_URL") or env_str("DISCORD_WEBHOOK"),
+            "discord_webhook": _env_url("discord_webhook", "DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK"),
             "telegram_token": env_str("TELEGRAM_BOT_TOKEN"),
             "telegram_chat_id": env_str("TELEGRAM_CHAT_ID"),
-            "ntfy_url": env_str("NTFY_URL"),
+            "ntfy_url": _env_url("ntfy_url", "NTFY_URL"),
             "ntfy_token": env_str("NTFY_TOKEN"),
-            "webhook_url": env_str("WEBHOOK_URL"),
+            "webhook_url": _env_url("webhook_url", "WEBHOOK_URL"),
             "smtp_host": env_str("SMTP_HOST", "smtp.gmail.com"),
             "smtp_port": int(env_str("SMTP_PORT", "587")) if env_str("SMTP_PORT", "587").isdigit() else 587,
             "smtp_user": env_str("SMTP_USER"),
@@ -251,7 +295,18 @@ def deep_merge(base: dict, patch: dict) -> dict:
 
 
 def _migrate(overrides: dict) -> dict:
-    """Settings saved by v2.0 had a single `camera`; turn it into the camera list."""
+    """Bring settings saved by older versions up to date."""
+    # Earlier versions accepted addresses that are now rejected (e.g. http:// for Discord). Drop just
+    # those, so one of them doesn't make Guardian ignore every other saved setting.
+    notifications = overrides.get("notifications")
+    if isinstance(notifications, dict):
+        for field in URL_FIELDS:
+            value = notifications.get(field)
+            problem = url_problem(field, value.strip()) if isinstance(value, str) else None
+            if problem:
+                print(f"[settings] Ignoring notifications.{field} in settings.json: it {problem}")
+                notifications.pop(field)
+    # v2.0 had a single `camera`; turn it into the camera list.
     if "camera" in overrides:
         old = overrides.pop("camera") or {}
         if "cameras" not in overrides:
@@ -261,6 +316,19 @@ def _migrate(overrides: dict) -> dict:
             if "source" not in cam:
                 cam["source"] = env_str("VIDEO_SOURCE", "auto")
             overrides["cameras"] = [cam]
+    # Zones saved before outlines that cross themselves or have no area were refused: drop them
+    # rather than ignoring the whole file.
+    cams = overrides.get("cameras")
+    for cam in cams if isinstance(cams, list) else []:
+        zones = cam.get("zones") if isinstance(cam, dict) else None
+        if isinstance(zones, list):
+            kept = []
+            for zone in zones:
+                try:
+                    kept.append(clean_zone(zone))
+                except (TypeError, ValueError) as exc:
+                    print(f"[settings] Dropping a zone of camera {cam.get('id')}: {exc}")
+            cam["zones"] = kept
     return overrides
 
 
@@ -282,6 +350,7 @@ class SettingsService:
         self.path = path
         self._lock = threading.RLock()
         self._listeners: list[Callable[[Settings, Settings], None]] = []
+        self._env = _env_defaults()  # read once, so .env warnings print once
         self._overrides = _migrate(self._load_overrides())
         try:
             self._settings = self._build(self._overrides)
@@ -310,9 +379,8 @@ class SettingsService:
             self._overrides["cameras"] = [c.model_dump() for c in self._settings.cameras]
             self._save()
 
-    @staticmethod
-    def _build(overrides: dict) -> Settings:
-        merged = deep_merge(Settings().model_dump(), _env_defaults())
+    def _build(self, overrides: dict) -> Settings:
+        merged = deep_merge(Settings().model_dump(), self._env)
         merged = deep_merge(merged, overrides)
         try:
             return Settings.model_validate(merged)
@@ -320,7 +388,8 @@ class SettingsService:
             msgs = []
             for err in exc.errors():
                 loc = ".".join(str(p) for p in err["loc"])
-                msgs.append(f"{loc}: {err['msg']}" if loc else err["msg"])
+                msg = err["msg"].removeprefix("Value error, ")
+                msgs.append(f"{loc}: {msg}" if loc else msg)
             raise SettingsError("; ".join(msgs)) from exc
 
     def get(self) -> Settings:
@@ -383,10 +452,12 @@ class SettingsService:
 
     def public(self) -> dict:
         """Settings as sent to the dashboard: secrets become *_set flags and are never echoed back."""
-        data = self.get().model_dump()
+        settings = self.get()
+        data = settings.model_dump()
         data["ai"]["api_key_set"] = bool(data["ai"].pop("api_key"))
         for key in NotificationSettings.SECRETS:
             data["notifications"][f"{key}_set"] = bool(data["notifications"].pop(key))
+        data["notifications"]["configured"] = settings.notifications.configured()
         return data
 
 

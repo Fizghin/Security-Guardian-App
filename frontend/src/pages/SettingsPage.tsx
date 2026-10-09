@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
-import { api, type AITestResult, type ScheduleRule, type ScheduleStatus, type Settings, type SettingsPatch } from '../api'
+import { api, type AITestResult, type NotificationChannel, type NotificationResult, type ScheduleRule, type Settings, type SettingsPatch, type Status } from '../api'
 import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
-import { formatBytes, formatUpcoming, formatUptime } from '../lib/format'
+import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -30,6 +30,7 @@ function Section({
   description,
   children,
   dirty,
+  canSave = true,
   onSave,
   onReset,
   extraActions,
@@ -39,6 +40,8 @@ function Section({
   description?: ReactNode
   children: ReactNode
   dirty?: boolean
+  /** false while the changes can't be saved yet; Discard still shows */
+  canSave?: boolean
   onSave?: () => Promise<unknown>
   onReset?: () => void
   extraActions?: ReactNode
@@ -60,7 +63,7 @@ function Section({
               )}
               <Button
                 variant="primary"
-                disabled={!dirty}
+                disabled={!dirty || !canSave}
                 loading={saving}
                 onClick={async () => {
                   setSaving(true)
@@ -307,7 +310,7 @@ function VoiceSection({ value, save, voice }: { value: Settings['ai']; save: Sav
           checked={d.draft.greet_insiders}
           onChange={(v) => d.set('greet_insiders', v)}
           label="Greet recognised people by name"
-          description="e.g. “Welcome back, Sam.” Needs insiders with photos and face recognition turned on."
+          description="e.g. “Welcome back, Sam.” Only while armed. Needs insiders with photos and face recognition turned on."
         />
       </div>
       {d.draft.greet_insiders && (
@@ -334,7 +337,7 @@ function scheduleProblem(rules: ScheduleRule[]): string | null {
   return null
 }
 
-function ScheduleSection({ value, save, status }: { value: Settings['schedule']; save: Save; status?: ScheduleStatus }) {
+function ScheduleSection({ value, save, status }: { value: Settings['schedule']; save: Save; status: Status | null }) {
   const d = useDraft(value)
   const rules = d.draft.rules
   const problem = scheduleProblem(rules)
@@ -343,20 +346,19 @@ function ScheduleSection({ value, save, status }: { value: Settings['schedule'];
     const days = rules[i].days.includes(day) ? rules[i].days.filter((x) => x !== day) : [...rules[i].days, day].sort()
     setRule(i, { days })
   }
-  const now =
-    status?.enabled && status.next_change && !d.dirty
-      ? `${status.active ? 'Armed' : 'Disarmed'} by the schedule now; ${status.active ? 'disarms' : 'arms'} ${formatUpcoming(status.next_change)}.`
-      : null
+  const now = status && !d.dirty ? describeSchedule(status.schedule, status.armed)?.long : undefined
+  const zone = status ? ` (UTC${status.time_zone.utc_offset})` : ''
   return (
     <Section
       id="schedule"
       title="Schedule"
-      description="Guardian arms itself during these periods and disarms outside them. Arming or disarming by hand lasts until the next change."
-      dirty={d.dirty && !problem}
+      description={`Guardian arms itself when a period starts and disarms when it ends. Arming or disarming by hand lasts until the next start or end. Times are in the Guardian computer’s time zone${zone}.`}
+      dirty={d.dirty}
+      canSave={!problem}
       onReset={d.reset}
       onSave={() => save({ schedule: d.changes })}
     >
-      <Toggle checked={d.draft.enabled} onChange={(v) => d.set('enabled', v)} label="Arm and disarm on a schedule" description={now ?? 'Times are this computer’s local time.'} />
+      <Toggle checked={d.draft.enabled} onChange={(v) => d.set('enabled', v)} label="Arm and disarm on a schedule" description={now} />
       {rules.length === 0 ? (
         <p className="text-sm text-zinc-500">No periods yet. Add one below.</p>
       ) : (
@@ -502,7 +504,7 @@ function RecordingSection({ value, save, encoder }: { value: Settings['recording
         <Field label="Split clips every">
           <NumberInput value={d.draft.max_clip_seconds} min={30} max={1800} suffix="sec" onChange={(v) => d.set('max_clip_seconds', v)} />
         </Field>
-        <Field label="Delete clips after" hint="0 keeps them forever">
+        <Field label="Delete clips after" hint="Event pictures too. 0 keeps them forever">
           <NumberInput value={d.draft.retention_days} min={0} max={3650} suffix="days" onChange={(v) => d.set('retention_days', v)} />
         </Field>
       </div>
@@ -513,7 +515,9 @@ function RecordingSection({ value, save, encoder }: { value: Settings['recording
 // ---- Notifications ---------------------------------------------------------------------------
 type Notifications = Settings['notifications']
 type SecretKey = 'discord_webhook' | 'telegram_token' | 'ntfy_token' | 'webhook_url' | 'smtp_password'
-const CHANNEL_NAMES: Record<string, string> = { discord: 'Discord', telegram: 'Telegram', ntfy: 'ntfy', webhook: 'Webhook', email: 'E-mail' }
+const SECRET_KEYS: SecretKey[] = ['discord_webhook', 'telegram_token', 'ntfy_token', 'webhook_url', 'smtp_password']
+const CHANNEL_NAMES: Record<NotificationChannel, string> = { discord: 'Discord', telegram: 'Telegram', ntfy: 'ntfy', webhook: 'Webhook', email: 'E-mail' }
+const CHAT_TYPES: Record<string, string> = { private: 'private chat', group: 'group', supergroup: 'group', channel: 'channel' }
 
 const notificationDraft = (n: Notifications) => ({
   telegram_chat_id: n.telegram_chat_id,
@@ -529,13 +533,24 @@ const notificationDraft = (n: Notifications) => ({
   webhook_url: '',
   smtp_password: '',
 })
+type NotificationDraft = ReturnType<typeof notificationDraft>
 
-function Channel({ name, ready, children, hint }: { name: string; ready: boolean; children: ReactNode; hint: ReactNode }) {
+// The fields of each channel, for its "Unsaved" hint
+const CHANNEL_FIELDS: Record<NotificationChannel, (keyof NotificationDraft)[]> = {
+  telegram: ['telegram_token', 'telegram_chat_id'],
+  ntfy: ['ntfy_url', 'ntfy_token'],
+  discord: ['discord_webhook'],
+  email: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'email_to'],
+  webhook: ['webhook_url'],
+}
+
+function Channel({ name, on, unsaved, children, hint }: { name: string; on: boolean; unsaved: boolean; children: ReactNode; hint: ReactNode }) {
   return (
     <div className="space-y-3 rounded-md border border-zinc-800 p-3">
       <div className="flex items-center gap-2 text-sm font-medium">
-        <Dot className={ready ? 'bg-emerald-500' : 'bg-zinc-600'} /> {name}
-        <span className="text-xs font-normal text-zinc-500">{ready ? 'On' : 'Off'}</span>
+        <Dot className={on ? 'bg-emerald-500' : 'bg-zinc-600'} /> {name}
+        <span className="text-xs font-normal text-zinc-500">{on ? 'On' : 'Off'}</span>
+        {unsaved && <span className="ml-auto text-xs font-normal text-amber-400">Unsaved</span>}
       </div>
       {children}
       <p className="hint">{hint}</p>
@@ -546,21 +561,35 @@ function Channel({ name, ready, children, hint }: { name: string; ready: boolean
 function NotificationsSection({ value, save }: { value: Notifications; save: Save }) {
   const notify = useToast()
   const d = useDraft(notificationDraft(value))
+  const [removing, setRemoving] = useState<SecretKey[]>([])
   const [testing, setTesting] = useState(false)
-  const [results, setResults] = useState<{ channel: string; ok: boolean; error: string | null }[] | null>(null)
+  const [results, setResults] = useState<NotificationResult[] | null>(null)
   const [chats, setChats] = useState<{ id: string; name: string; type: string }[] | null>(null)
   const [finding, setFinding] = useState(false)
 
-  const ready = {
-    telegram: (value.telegram_token_set || !!d.draft.telegram_token) && !!d.draft.telegram_chat_id,
-    ntfy: !!d.draft.ntfy_url,
-    discord: value.discord_webhook_set || !!d.draft.discord_webhook,
-    email: !!d.draft.smtp_user && (value.smtp_password_set || !!d.draft.smtp_password) && !!d.draft.email_to,
-    webhook: value.webhook_url_set || !!d.draft.webhook_url,
+  // A secret left blank (or only spaces) keeps the saved one; Remove clears it when saving.
+  const changes: Partial<NotificationDraft> = { ...d.changes }
+  for (const key of SECRET_KEYS) {
+    const typed = d.draft[key].trim()
+    if (removing.includes(key)) changes[key] = ''
+    else if (typed) changes[key] = typed
+    else delete changes[key]
   }
+  const dirty = Object.keys(changes).length > 0
+  // On/Off is what is saved, decided by the server the same way it decides when sending
+  const on = (c: NotificationChannel) => value.configured.includes(c)
+  const unsaved = (c: NotificationChannel) => CHANNEL_FIELDS[c].some((f) => f in changes)
+
+  const reset = () => {
+    d.reset()
+    setRemoving([])
+    setChats(null)
+  }
+  const keep = (key: SecretKey) => setRemoving((r) => r.filter((k) => k !== key))
 
   const secret = (key: SecretKey, label: string, placeholder: string, hidden = true) => {
     const saved = value[`${key}_set`]
+    const removed = removing.includes(key)
     return (
       <Field label={label}>
         <div className="flex gap-2">
@@ -570,13 +599,29 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
             spellCheck={false}
             className="input"
             value={d.draft[key]}
-            placeholder={saved ? 'Saved; type to replace' : placeholder}
-            onChange={(e) => d.set(key, e.target.value)}
+            placeholder={removed ? 'Removed when you save' : saved ? 'Saved; type to replace' : placeholder}
+            onChange={(e) => {
+              d.set(key, e.target.value)
+              keep(key)
+            }}
           />
-          {saved && !d.draft[key] && (
-            <Button variant="ghost" onClick={() => save({ notifications: { [key]: '' } })}>
-              Remove
+          {removed ? (
+            <Button variant="ghost" onClick={() => keep(key)}>
+              Undo
             </Button>
+          ) : (
+            saved &&
+            !d.draft[key].trim() && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  d.set(key, '')
+                  setRemoving((r) => [...r, key])
+                }}
+              >
+                Remove
+              </Button>
+            )
           )}
         </div>
       </Field>
@@ -598,10 +643,11 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
   const findChat = async () => {
     setFinding(true)
     try {
-      const found = (await api.telegramChats(d.draft.telegram_token)).chats
+      const found = (await api.telegramChats(d.draft.telegram_token.trim())).chats
+      if (!found.length) notify('No messages yet. Send your bot any message in Telegram, then try again.', 'error')
+      // A single chat is picked straight away; its name stays on screen so you can see whose it is
       if (found.length === 1) d.set('telegram_chat_id', found[0].id)
-      else if (!found.length) notify('No messages yet. Send your bot any message in Telegram, then try again.', 'error')
-      setChats(found.length > 1 ? found : null)
+      setChats(found.length ? found : null)
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -619,14 +665,13 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
       id="notifications"
       title="Notifications"
       description="Where alerts go when someone reaches the alert level, with a picture; the clip follows once it is saved. Use as many as you like."
-      dirty={d.dirty}
-      onReset={() => {
-        d.reset()
-        setChats(null)
+      dirty={dirty}
+      onReset={reset}
+      onSave={async () => {
+        if (await save({ notifications: changes })) reset()
       }}
-      onSave={() => save({ notifications: d.changes })}
       extraActions={
-        <Button icon={<Send className="h-4 w-4" />} loading={testing} disabled={d.dirty || !Object.values(ready).some(Boolean)} onClick={test} title={d.dirty ? 'Save first' : undefined}>
+        <Button icon={<Send className="h-4 w-4" />} loading={testing} disabled={dirty || !value.configured.length} onClick={test} title={dirty ? 'Save first' : 'Sends a test alert with a small picture to every channel that is on'}>
           Send test
         </Button>
       }
@@ -635,9 +680,11 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
         <ul className="space-y-1 rounded-md border border-zinc-800 p-3 text-sm">
           {results.map((r) => (
             <li key={r.channel} className="flex gap-2">
-              <Dot className={cx('mt-1.5', r.ok ? 'bg-emerald-500' : 'bg-red-500')} />
-              <span className="font-medium">{CHANNEL_NAMES[r.channel] ?? r.channel}</span>
-              <span className={r.ok ? 'text-zinc-400' : 'text-red-400'}>{r.ok ? 'Test sent' : r.error}</span>
+              <Dot className={cx('mt-1.5', !r.ok ? 'bg-red-500' : r.note ? 'bg-amber-500' : 'bg-emerald-500')} />
+              <span className="font-medium">{CHANNEL_NAMES[r.channel]}</span>
+              <span className={cx('min-w-0', !r.ok ? 'text-red-400' : r.note ? 'text-amber-400' : 'text-zinc-400')}>
+                {!r.ok ? r.error : r.note ? `Test sent. ${r.note}` : 'Test sent'}
+              </span>
             </li>
           ))}
         </ul>
@@ -645,31 +692,26 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
       <div className="grid items-start gap-3 xl:grid-cols-2">
         <Channel
           name="Telegram"
-          ready={ready.telegram}
-          hint={<>In Telegram, create a bot with <span className="font-mono">@BotFather</span> and paste its token. Then send your bot any message and press Find chat.</>}
+          on={on('telegram')}
+          unsaved={unsaved('telegram')}
+          hint={<>In Telegram, create a bot with <span className="font-mono">@BotFather</span> and paste its token. Then send your bot any message, press Find chat and check that the name shown is yours.</>}
         >
           {secret('telegram_token', 'Bot token', '123456789:AA…')}
           <Field label="Chat">
             <div className="flex gap-2">
               <input className="input" value={d.draft.telegram_chat_id} placeholder="Chat id" onChange={(e) => d.set('telegram_chat_id', e.target.value)} />
-              <Button loading={finding} disabled={!value.telegram_token_set && !d.draft.telegram_token} onClick={findChat}>
+              <Button loading={finding} disabled={!value.telegram_token_set && !d.draft.telegram_token.trim()} onClick={findChat}>
                 Find chat
               </Button>
             </div>
           </Field>
           {chats && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-zinc-500">{chats.length === 1 ? 'Found:' : 'Pick your chat:'}</span>
               {chats.map((c) => (
-                <Button
-                  key={c.id}
-                  size="sm"
-                  variant={d.draft.telegram_chat_id === c.id ? 'primary' : 'secondary'}
-                  onClick={() => {
-                    d.set('telegram_chat_id', c.id)
-                    setChats(null)
-                  }}
-                >
+                <Button key={c.id} size="sm" variant={d.draft.telegram_chat_id === c.id ? 'primary' : 'secondary'} onClick={() => d.set('telegram_chat_id', c.id)}>
                   {c.name}
+                  {c.type && <span className="font-normal opacity-70">{CHAT_TYPES[c.type] ?? c.type}</span>}
                 </Button>
               ))}
             </div>
@@ -677,8 +719,9 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
         </Channel>
         <Channel
           name="ntfy (phone push)"
-          ready={ready.ntfy}
-          hint="Install the ntfy app, subscribe to a long, hard-to-guess topic and paste its address here. Anyone who knows the topic can read the alerts."
+          on={on('ntfy')}
+          unsaved={unsaved('ntfy')}
+          hint="Install the ntfy app, subscribe to a long, hard-to-guess topic and paste its address here. Anyone who knows the topic can read the alerts. A self-hosted server needs attachments turned on to send pictures."
         >
           <Field label="Topic address">
             <div className="flex gap-2">
@@ -688,10 +731,10 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
           </Field>
           {secret('ntfy_token', 'Access token (optional)', 'Only for protected topics')}
         </Channel>
-        <Channel name="Discord" ready={ready.discord} hint="Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.">
+        <Channel name="Discord" on={on('discord')} unsaved={unsaved('discord')} hint="Server settings → Integrations → Webhooks → New webhook → Copy webhook URL.">
           {secret('discord_webhook', 'Webhook URL', 'https://discord.com/api/webhooks/…', false)}
         </Channel>
-        <Channel name="E-mail" ready={ready.email} hint="For Gmail, use an app password (Google account → Security → App passwords), not your normal password.">
+        <Channel name="E-mail" on={on('email')} unsaved={unsaved('email')} hint="For Gmail, use an app password (Google account → Security → App passwords), not your normal password.">
           <div className="grid gap-3 sm:grid-cols-[1fr_7rem]">
             <Field label="Mail server">
               <input className="input" value={d.draft.smtp_host} onChange={(e) => d.set('smtp_host', e.target.value)} />
@@ -712,7 +755,8 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
         </Channel>
         <Channel
           name="Webhook"
-          ready={ready.webhook}
+          on={on('webhook')}
+          unsaved={unsaved('webhook')}
           hint={<>Guardian POSTs JSON with <span className="font-mono">title</span>, <span className="font-mono">message</span>, <span className="font-mono">severity</span>, <span className="font-mono">time</span> and <span className="font-mono">snapshot_jpeg_base64</span>. Works with Home Assistant, Node-RED or n8n.</>}
         >
           {secret('webhook_url', 'Address', 'https://…', false)}
@@ -820,7 +864,7 @@ export default function SettingsPage({ section }: { section: string }) {
       </nav>
       <div className="min-w-0 space-y-4">
         <CamerasSection key={k(settings.phone)} phoneSettings={settings.phone} savePhone={(phone) => save({ phone })} />
-        <ScheduleSection key={k(settings.schedule)} value={settings.schedule} save={save} status={status?.schedule} />
+        <ScheduleSection key={k(settings.schedule)} value={settings.schedule} save={save} status={status} />
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />

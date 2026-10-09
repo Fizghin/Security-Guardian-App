@@ -210,6 +210,12 @@ class Recorder:
     def active(self) -> bool:
         return self.current is not None
 
+    @property
+    def file(self) -> str | None:
+        """Name of the clip being recorded. It can be played once it is saved."""
+        cur = self.current
+        return cur["file"] if cur else None
+
     def start(self, reason: str, level: int = 0) -> str | None:
         """Start (or keep) recording. Returns the clip file name."""
         with self._lock:
@@ -229,10 +235,13 @@ class Recorder:
             part = self.dir / f"{stem}.part.mp4"
             first = frame if frame is not None else self._preroll[-1]
             self._size = self._writer_size(first)
+            # Before the file exists, so that pruning never takes it for a leftover from a crash
+            self.library.in_progress.add(name)
             try:
                 ffmpeg = self.library.ffmpeg
                 self._writer = _FFmpegWriter(ffmpeg, part, self._size) if ffmpeg else _OpenCVWriter(part, self._size)
             except Exception as exc:
+                self.library.in_progress.discard(name)
                 print(f"[rec:{self.camera_id}] Could not start writer: {exc}")
                 return None
             cv2.imwrite(str(self.dir / f"{stem}.jpg"), self._fit(first), [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -240,7 +249,6 @@ class Recorder:
             self._preroll.clear()
             self.current = {"file": name, "part": part, "reason": reason, "max_level": level,
                             "started": time.time() - len(preroll) / FPS, "frames": 0}
-            self.library.in_progress.add(name)
             self._stop_at = None
             for f in preroll:
                 self._write(f)
@@ -291,11 +299,11 @@ class Recorder:
         cur, writer = self.current, self._writer
         self.current, self._writer, self._stop_at = None, None, None
         ok = writer.close() if writer else False
-        self.library.in_progress.discard(cur["file"])
         final = self.dir / cur["file"]
         if not ok or not cur["part"].exists() or cur["frames"] == 0:
             cur["part"].unlink(missing_ok=True)
             (self.dir / f"{final.stem}.jpg").unlink(missing_ok=True)
+            self.library.in_progress.discard(cur["file"])
             print(f"[rec:{self.camera_id}] Discarded {cur['file']}")
             return
         meta = {
@@ -311,6 +319,7 @@ class Recorder:
         # Metadata first: a listing must never see the finished clip without its camera and reason
         (self.dir / f"{final.stem}.json").write_text(json.dumps(meta), encoding="utf-8")
         cur["part"].replace(final)
+        self.library.in_progress.discard(cur["file"])
         print(f"[rec:{self.camera_id}] Saved {final.name} ({meta['duration']}s)")
         if self.on_finished:
             info = {**meta, "file": final.name, "path": str(final)}

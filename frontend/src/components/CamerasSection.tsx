@@ -62,7 +62,7 @@ function PhoneBattery({ live }: { live?: CameraStatus }) {
 }
 
 // ---- pairing a phone ---------------------------------------------------------------
-export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onReset?: () => void }) {
+export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onReset?: (camera: CameraConfig) => void }) {
   const notify = useToast()
   const { status } = useStatus()
   const [pairing, setPairing] = useState<Pairing | null>(null)
@@ -96,10 +96,10 @@ export function PairingPanel({ camera, onReset }: { camera: CameraConfig; onRese
   const reset = async () => {
     setBusy(true)
     try {
-      await api.resetPhoneLink(camera.id)
+      const updated = await api.resetPhoneLink(camera.id)
       notify('New link created; the old one no longer works', 'success')
       setConfirmReset(false)
-      onReset?.()
+      onReset?.(updated)
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -432,7 +432,15 @@ function AddCameraDialog({ open, count, onClose, onAdded }: { open: boolean; cou
         </div>
       )}
 
-      {step === 'pair' && created && <PairingPanel camera={created} />}
+      {step === 'pair' && created && (
+        <PairingPanel
+          camera={created}
+          onReset={(cam) => {
+            setCreated(cam)
+            onAdded()
+          }}
+        />
+      )}
     </Modal>
   )
 }
@@ -582,20 +590,29 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
           const live = status?.cameras.find((s) => s.id === c.id)
           const Icon = KIND_ICON[c.kind]
           return (
+            // On a phone the buttons move to a line of their own, so the name and status stay readable
             <div key={c.id} className="flex flex-wrap items-center gap-3 p-3">
               <Icon className={cx('h-5 w-5 shrink-0', c.enabled ? 'text-zinc-300' : 'text-zinc-600')} />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-48">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Dot className={!c.enabled ? 'bg-zinc-600' : live?.connected ? 'bg-emerald-500' : 'bg-amber-500'} />
-                  <span className={c.enabled ? 'text-zinc-100' : 'text-zinc-500'}>{c.name}</span>
+                  <span className={cx('truncate', c.enabled ? 'text-zinc-100' : 'text-zinc-500')}>{c.name}</span>
                   <PhoneBattery live={live} />
                 </div>
-                <div className="mt-0.5 truncate text-xs text-zinc-500" title={c.source}>
-                  {sourceSummary(c)} · {c.enabled ? <LiveState live={live} /> : 'Turned off'}
-                  {c.zones.length > 0 && ` · ${c.zones.length} zone${c.zones.length === 1 ? '' : 's'}`}
+                <div className="mt-0.5 flex flex-wrap gap-x-1 text-xs text-zinc-500">
+                  <span className="max-w-full truncate" title={c.source}>
+                    {sourceSummary(c)} ·
+                  </span>
+                  <span>
+                    {c.enabled ? <LiveState live={live} /> : 'Turned off'}
+                    {c.zones.length > 0 && ` · ${c.zones.length} zone${c.zones.length === 1 ? '' : 's'}`}
+                    {c.enabled && live?.zones_mismatch && (
+                      <span className="text-amber-400"> · The picture changed shape: redraw the zones</span>
+                    )}
+                  </span>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="ml-auto flex shrink-0 items-center gap-1">
                 {c.kind === 'phone' && (
                   <Button size="sm" variant="ghost" icon={<QrCode className="h-4 w-4" />} onClick={() => setPairing(c)}>
                     Pair
