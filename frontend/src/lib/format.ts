@@ -138,6 +138,7 @@ const EVENT_LABELS: Record<string, string> = {
   TALK: 'Talk',
   LEARNED: 'Learned',
   BRIEFING: 'Briefing',
+  VAULT: 'Evidence vault',
 }
 
 export const eventLabel = (type: string) =>

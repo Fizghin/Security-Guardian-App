@@ -16,6 +16,7 @@ An incident ends when nobody unrecognised has been seen for clear_after
 seconds, when the system is disarmed, or when the alarm is reset. A panic is
 driven by the CameraManager and stays at level 4 until it is reset.
 """
+import secrets
 import threading
 import time
 from typing import Callable, List
@@ -64,6 +65,7 @@ class CameraBrain:
         self.incident_start: float | None = None
         self.last_seen: float | None = None
         self._incident_id = 0
+        self.incident_key: str | None = None  # stored with the incident's events, to group them into a report
         self._peak = 0
         self._spoken_level = 0
         self._siren_fired = False
@@ -108,7 +110,8 @@ class CameraBrain:
             if details is not None and insider:
                 details["insider"] = insider  # who "Not <name>" feedback would be about
         event_id = self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
-                                   snapshot=picture, details=details)
+                                   snapshot=picture, details=details,
+                                   incident=self.incident_key)
         if picture and event_id is not None and self.incident_start is not None:
             self.picture_event = event_id
 
@@ -222,6 +225,7 @@ class CameraBrain:
     # ---- state machine --------------------------------------------------
     def _begin_incident(self, now: float, simulated: bool = False) -> None:
         self._incident_id += 1
+        self.incident_key = f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}-{secrets.token_hex(3)}"
         self.incident_start = now
         self.last_seen = now
         self.threat_level = 1
@@ -348,6 +352,7 @@ class CameraBrain:
         duration = int(now - (self.incident_start or now))
         self._log("CLEARED", f"{reason}. Incident lasted {duration}s, peak level {self._peak}.", "LOW")
         self._incident_id += 1
+        self.incident_key = None
         self.incident_start = None
         self.last_seen = None
         self.threat_level = 0

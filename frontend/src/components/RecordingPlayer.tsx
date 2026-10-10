@@ -3,6 +3,7 @@ import { Download, Trash2 } from 'lucide-react'
 import { api, type Recording } from '../api'
 import { formatBytes, formatDateTime, formatDuration, reasonLabel } from '../lib/format'
 import { errorMessage, useToast } from '../lib/toast'
+import { ClipVerify } from './ClipSeal'
 import { Button, ConfirmDialog, Modal } from './ui'
 
 const browserPlaysH264 = () => document.createElement('video').canPlayType('video/mp4; codecs="avc1.42E01E"') !== ''
@@ -113,6 +114,7 @@ export default function RecordingPlayer({
             </p>
           </div>
         )}
+        {!missing && <ClipVerify file={file} />}
       </Modal>
       <ConfirmDialog
         open={confirm}

@@ -1,7 +1,8 @@
-import { Film } from 'lucide-react'
+import { FileText, Film } from 'lucide-react'
 import { api, type SecurityEvent } from '../api'
 import { eventLabel, formatDateTime, formatShortDate, formatTime, isToday, SEVERITY_STYLE } from '../lib/format'
 import { cx } from '../lib/cx'
+import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
 import EventFeedback from './EventFeedback'
 import { Badge, Button, Modal } from './ui'
@@ -58,6 +59,17 @@ export default function EventRow({
         Clip
       </button>
     ))
+  // Reports start from the detection, or from an alert, of one of a camera's incidents
+  const report = event.incident && (event.event_type === 'DETECTION' || event.event_type === 'ALERT') && (
+    <a
+      href={href('incident', event.incident)}
+      className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-blue-400 hover:bg-zinc-800 hover:text-blue-300"
+      title="Incident report"
+    >
+      <FileText className="h-3.5 w-3.5" />
+      {compact ? 'Report' : 'Incident report'}
+    </a>
+  )
   const picture = event.snapshot && onOpenPicture && (
     <button
       type="button"
@@ -81,6 +93,7 @@ export default function EventRow({
           </div>
           <div className="mt-1 flex items-start gap-2">
             <p className="line-clamp-2 min-w-0 flex-1 text-zinc-300">{event.description}</p>
+            {report}
             {clip}
           </div>
           <EventFeedback event={event} className="-ml-2 mt-1" />
@@ -101,6 +114,7 @@ export default function EventRow({
       <p className="min-w-0 flex-1 text-zinc-300">{event.description}</p>
       <div className="flex items-center gap-2 empty:hidden">
         <EventFeedback event={event} className="-ml-2 sm:ml-0" />
+        {report}
         {clip}
         {picture}
       </div>

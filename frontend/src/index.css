@@ -56,3 +56,60 @@
     @apply w-full accent-blue-500;
   }
 }
+
+/* Printing an incident report (or saving it as a PDF): dark text on white, no app chrome */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto;
+  }
+
+  body {
+    background: #fff;
+    color: #111;
+  }
+
+  .report,
+  .report * {
+    color: #111 !important;
+    background: transparent !important;
+    border-color: #d4d4d8 !important;
+    box-shadow: none !important;
+  }
+
+  .report .tone-good {
+    color: #047857 !important;
+  }
+
+  .report .tone-bad {
+    color: #b91c1c !important;
+  }
+
+  .report .tone-warn {
+    color: #b45309 !important;
+  }
+
+  .report .tone-muted,
+  .report .print-muted {
+    color: #52525b !important;
+  }
+
+  .report figure,
+  .report tr,
+  .report li {
+    break-inside: avoid;
+  }
+
+  .report .print-break {
+    break-before: page;
+  }
+}

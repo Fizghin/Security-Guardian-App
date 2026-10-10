@@ -38,6 +38,7 @@ class SecurityEvent(Base):
     snapshot = Column(String, nullable=True)  # picture of the moment, file name in storage/snapshots
     details = Column(String, nullable=True)  # JSON: the people in the picture (see learning_service.event_details)
     feedback = Column(String, nullable=True)  # the owner's verdict: real, false_alarm or wrong_person
+    incident = Column(String, nullable=True, index=True)  # the camera's incident, set by its brain
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +54,7 @@ class SecurityEvent(Base):
             "snapshot": self.snapshot or None,
             "details": json.loads(self.details) if self.details else None,
             "feedback": self.feedback,
+            "incident": self.incident,
         }
 
 
@@ -116,6 +118,9 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN details VARCHAR"))
         if "feedback" not in existing:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN feedback VARCHAR"))
+        if "incident" not in existing:
+            conn.execute(text("ALTER TABLE security_events ADD COLUMN incident VARCHAR"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_security_events_incident ON security_events (incident)"))
 
 
 def get_db():

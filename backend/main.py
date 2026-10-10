@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse  # noqa: E402
 
 from api import phone_router, router, ws_router  # noqa: E402
+from evidence_api import router as evidence_router  # noqa: E402
 from models.database import init_db  # noqa: E402
 from services.ai_service import ai_service  # noqa: E402
 from services.camera_service import camera_manager  # noqa: E402
@@ -29,6 +30,7 @@ from services.recording_service import recording_library  # noqa: E402
 from services.settings_service import Settings, settings_service  # noqa: E402
 from services.siren_service import siren_service  # noqa: E402
 from services.tts_service import tts_service  # noqa: E402
+from services.vault_service import evidence_vault  # noqa: E402
 from services.visitor_service import visitor_service  # noqa: E402
 
 def is_phone_path(path: str) -> bool:
@@ -79,6 +81,7 @@ async def _run_phone_listener(server: uvicorn.Server) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    evidence_vault.start(recording_library, event_service)  # before anything is saved or deleted
     visitor_service.start()
     learning_service.start()
     cfg = settings_service.get()
@@ -112,6 +115,7 @@ async def lifespan(app: FastAPI):
         await phone_task
     camera_manager.stop()
     siren_service.stop()
+    evidence_vault.wait_idle()  # seal the clips the cameras just finished
     event_service.log("SYSTEM", "Guardian stopped", "INFO")
 
 
@@ -233,6 +237,7 @@ app.add_middleware(CORSMiddleware, allow_origins=list(DEV_ORIGINS), allow_method
 app.add_middleware(DashboardPassword, password=DASHBOARD_PASSWORD)
 app.add_middleware(PhonePortGuard, port=PHONE_PORT)
 app.include_router(router)
+app.include_router(evidence_router)
 app.include_router(ws_router)
 app.include_router(phone_router)
 

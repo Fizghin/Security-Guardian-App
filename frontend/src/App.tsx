@@ -5,6 +5,7 @@ import ToastProvider from './components/ToastProvider'
 import { PAGE_TITLES, useRoute } from './lib/route'
 import { StatusContext } from './lib/status'
 import { usePoll } from './lib/usePoll'
+import IncidentPage from './pages/IncidentPage'
 import InsidersPage from './pages/InsidersPage'
 import LearningPage from './pages/LearningPage'
 import LivePage from './pages/LivePage'
@@ -40,6 +41,7 @@ export default function App() {
           {page === 'visitors' && <VisitorsPage />}
           {page === 'learning' && <LearningPage />}
           {page === 'settings' && <SettingsPage section={section} />}
+          {page === 'incident' && <IncidentPage key={section} id={section} />}
         </Shell>
       </StatusContext.Provider>
     </ToastProvider>

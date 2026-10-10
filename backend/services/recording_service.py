@@ -85,6 +85,9 @@ class RecordingLibrary:
         self.dir = directory
         self.ffmpeg = find_ffmpeg()
         self.in_progress: set[str] = set()
+        # The evidence vault seals each saved clip and records each deletion
+        self.on_saved: Callable[[Path], None] | None = None
+        self.on_deleted: Callable[[Path, str], None] | None = None
         if not self.ffmpeg:
             print("[rec] FFmpeg not found; clips will use OpenCV's MPEG-4 encoder")
 
@@ -131,12 +134,14 @@ class RecordingLibrary:
             raise FileNotFoundError(name)
         return path
 
-    def delete(self, name: str) -> None:
+    def delete(self, name: str, reason: str = "Deleted from the dashboard") -> None:
         if Path(name).name in self.in_progress:
             raise PermissionError("Recording is still in progress")
         video = self.path(name)
         for suffix in (".mp4", ".jpg", ".json"):
             video.with_suffix(suffix).unlink(missing_ok=True)
+        if self.on_deleted:
+            self.on_deleted(video, reason)
 
     def prune(self, retention_days: int) -> int:
         removed = 0
@@ -146,6 +151,8 @@ class RecordingLibrary:
                 if not f.name.endswith(".part.mp4") and f.stat().st_mtime < cutoff:
                     for suffix in (".mp4", ".jpg", ".json"):
                         f.with_suffix(suffix).unlink(missing_ok=True)
+                    if self.on_deleted:
+                        self.on_deleted(f, f"Older than {retention_days} days (automatic clean-up)")
                     removed += 1
         # Leftovers from a crash mid-recording.
         for f in self.dir.glob("*.part.mp4"):
@@ -320,6 +327,8 @@ class Recorder:
         (self.dir / f"{final.stem}.json").write_text(json.dumps(meta), encoding="utf-8")
         cur["part"].replace(final)
         self.library.in_progress.discard(cur["file"])
+        if self.library.on_saved:
+            self.library.on_saved(final)  # only queues the sealing
         print(f"[rec:{self.camera_id}] Saved {final.name} ({meta['duration']}s)")
         if self.on_finished:
             info = {**meta, "file": final.name, "path": str(final)}
