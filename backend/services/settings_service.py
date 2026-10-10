@@ -159,6 +159,13 @@ class ScheduleSettings(BaseModel):
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
 
 
+class BriefingSettings(BaseModel):
+    """A short summary of the last 24 hours, written once a day (see services/briefing_service.py)."""
+    enabled: bool = True
+    time: str = Field("08:00", pattern=HHMM)  # this computer's local time
+    send: bool = False  # also send it through the alert channels at that time
+
+
 CHANNELS = ("discord", "telegram", "ntfy", "webhook", "email")
 # Address fields and the schemes they accept. Discord only ever hands out https:// webhooks.
 URL_FIELDS = {"discord_webhook": ("https",), "ntfy_url": ("https", "http"), "webhook_url": ("https", "http")}
@@ -228,6 +235,7 @@ class Settings(BaseModel):
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
     notifications: NotificationSettings = NotificationSettings()
+    briefing: BriefingSettings = BriefingSettings()
 
     @field_validator("cameras")
     @classmethod
