@@ -69,10 +69,11 @@ def test_vad_skips_guardians_own_voice():
     feed_chunks(vad, noise(1))
     assert feed_chunks(vad, voice(2), own=True) == []
     assert feed_chunks(vad, noise(1.5)) == []
-    # speech cut short by Guardian talking is dropped, not glued to what follows
+    # speech cut short by Guardian talking is dropped, and so is the rest of it
     feed_chunks(vad, voice(0.6))
     assert feed_chunks(vad, voice(0.5), own=True) == []
-    assert feed_chunks(vad, noise(1.5)) == []
+    assert feed_chunks(vad, np.concatenate([voice(1.2), noise(1.5)])) == []
+    assert len(feed_chunks(vad, np.concatenate([voice(1.2), noise(1.5)]))) == 1, "listens again after a pause"
 
 
 # ---- speech to text ------------------------------------------------------------------------------
@@ -207,6 +208,15 @@ def test_rejected_reply_is_retried_then_falls_back(tmp_path):
     assert result["source"] == "fallback" and result["error"] == "Cannot reach ollama"
 
 
+def test_fallback_moves_to_the_next_level_rather_than_repeat(tmp_path):
+    from data.fallback_messages import LINES
+    cfg = SettingsService(tmp_path / "s.json").get().ai
+    level2 = [text for text, needs in LINES[2]["firm"] if needs <= {"rec"}]
+    w = WarningContext(level=2, location="Porch", recording=True, said=level2)
+    text = guard_bot.fallback_reply(w, cfg)
+    assert text not in level2 and text in [t for t, _ in LINES[3]["firm"]]
+
+
 def check_reply_is_true(text):
     from services.ai_service import check_reply
     return check_reply(text, reply_ctx().warning) is None
@@ -315,6 +325,7 @@ def test_guard_bot_hears_and_answers_once_per_six_seconds(scene):
 
 def test_guard_bot_stays_silent_while_the_owner_talks(scene):
     intrusion(scene)
+    scene.bot.own_sound = lambda: scene.relay.talking  # the camera's check includes the owner talking
     scene.relay.talking = True
     scene.bot.heard("Hello?", scene.brain.incident_id)
     scene.bot.tick()

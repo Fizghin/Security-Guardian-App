@@ -22,6 +22,7 @@ call venv\Scripts\activate.bat
 echo [2/4] Installing Python packages (first run downloads ~1 GB, mostly PyTorch)...
 python -m pip install --upgrade pip >nul
 pip install -r backend\requirements.txt || (echo [ERROR] pip install failed & pause & exit /b 1)
+pip install -r backend\requirements-optional.txt || echo Sound recognition and the Guard Bot are not available on this computer (optional)
 
 if not exist backend\.env (
     copy backend\.env.template backend\.env >nul

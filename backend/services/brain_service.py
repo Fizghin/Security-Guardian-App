@@ -424,7 +424,7 @@ class CameraBrain:
         return spoken
 
     def _on_recording_finished(self, info: dict) -> None:
-        label = {"panic": "panic", "test": "test", "intruder": "intrusion", "sound": "loud sound"}.get(info["reason"],
+        label = {"panic": "panic", "test": "test", "intruder": "intrusion", "sound": "sound"}.get(info["reason"],
                                                                                                      info["reason"])
         peak = f" (peak level {info['max_level']})" if info["max_level"] else ""
         self._log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip{peak}", recording=info["file"])

@@ -7,6 +7,8 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Several cameras at once**: webcams, IP/RTSP cameras, phones running an IP-camera app, and any phone with a browser (scan a QR code, no app). Each camera has its own incident, recording and speaker.
 - **Phones as CCTV**: an old phone streams its camera to Guardian and plays the warnings and siren from its own speaker, right where the intruder is. Battery level and offline alerts included.
 - **Two-way audio**: hold a button to talk through a camera's speaker, listen to what a phone camera hears, and get alerts for loud sounds such as breaking glass or a slammed door.
+- **Sound recognition**: phone camera microphones tell breaking glass, smoke alarms, screams, gunshots, banging, barking, a crying baby and sirens apart, on this computer. While armed, the serious ones raise the alarm even with nobody on camera.
+- **Guard Bot**: during an intrusion Guardian hears what the person says, writes it down locally and answers in one short, checked sentence through the camera's speaker.
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
 - **Repeat visitors**: Guardian remembers strangers' faces and tells you when someone comes back ("seen before: 3 visits, last Tue 23:10"). Name them, or turn them into insiders in one click.
@@ -27,6 +29,8 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 | Camera | any webcam, a phone running DroidCam, or an RTSP/HTTP IP camera |
 
 FFmpeg is bundled through `imageio-ffmpeg`; a system FFmpeg is used if present.
+
+Sound recognition and the Guard Bot need two optional packages, `mediapipe` and `faster-whisper` (`backend/requirements-optional.txt`). The install scripts try to install them; Guardian runs without them, and Settings says what is missing.
 
 ## Install and run
 
@@ -113,8 +117,50 @@ The phone connects to port **8443** (`PHONE_PORT` in `backend/.env`). That port 
 After **Start camera** the phone page also asks for the microphone, separately from the camera: if it is refused, the camera keeps working and the page shows *Microphone off* with a **Try again** button.
 
 - **Hold to talk** (Live page → Controls): hold the button with the mouse or a finger, or press and hold Space while it has focus, and speak. Your voice goes where the camera's warnings go (*Play warnings, the siren and your voice on* in the camera's settings). A phone plays it as you speak and shows *Owner is speaking*. This computer plays it as you speak through `paplay`, `aplay` or `ffplay`; without one of those (macOS without FFmpeg, Windows) it plays what you said when you let go. The text under the button says which applies. One person talks through a camera at a time, and that camera's spoken warnings wait until they finish. Each talk is logged, e.g. *Spoke through Porch for 8 s*.
-- **Listen** (phone cameras): plays what the phone's microphone hears, with a level meter. The phone only sends sound while someone listens, and its page says *the owner is listening* meanwhile.
-- **Loud sounds** (Settings → Detection): the phone reports how loud it is about four times a second. A sound counts as loud when it is well above what that place usually sounds like (the quiet end of the last minute) and above an absolute floor; *Sound sensitivity* sets how far above (30 dB at 5, 10 dB at 10). Guardian's own warnings, the siren and your voice don't count. *Log them with a picture* (the default) adds an event such as *Loud sound (-8 dB, usually -45 dB)* with the camera's picture, at most every 30 seconds per camera. *Log them and alert me* also records a clip and sends the alert with the picture while armed (at most every 5 minutes per camera). Nothing is spoken, since a sound alone doesn't say who is there.
+- **Listen** (phone cameras): plays what the phone's microphone hears, with a level meter. The phone only sends sound while someone listens, while sound recognition is on, or while the Guard Bot listens during an intrusion (below), and its page says which.
+- **Loud sounds** (Settings → Detection), used when sound recognition is off or can't run: the phone reports how loud it is about four times a second. A sound counts as loud when it is well above what that place usually sounds like (the quiet end of the last minute) and above an absolute floor; *Sound sensitivity* sets how far above (30 dB at 5, 10 dB at 10). Guardian's own warnings, the siren and your voice don't count. *Log them with a picture* (the default) adds an event such as *Loud sound (-8 dB, usually -45 dB)* with the camera's picture, at most every 30 seconds per camera. *Log them and alert me* also records a clip and sends the alert with the picture while armed (at most every 5 minutes per camera). Nothing is spoken, since a sound alone doesn't say who is there.
+
+### Sound recognition
+
+Settings → Detection → **Recognise sounds** (on by default). Phone cameras then stream their microphone to this computer as 16 kHz 16-bit mono, about 32 kB/s (roughly 115 MB an hour) per phone over your Wi-Fi. A sound classifier (YAMNet, 521 kinds of sound) runs locally on 0.975 s windows every 0.5 s, for all cameras on one background thread. Its 4 MB model is downloaded on first use into `backend/storage/models/yamnet.tflite` (to set it up offline, save <https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite> there). Settings → Guard Bot shows whether it is ready, downloading or what is missing.
+
+| Kind of sound | Default | Severity |
+|---|---|---|
+| Glass breaking | Log and alert me | High |
+| Smoke or fire alarm | Log and alert me | High |
+| Scream or shout | Log and alert me | High |
+| Gunshot or explosion | Log and alert me | High |
+| Banging or knocking | Log with a picture | Medium |
+| Baby crying | Log and alert me | Medium |
+| Dog barking | Log with a picture | Low |
+| Siren | Log with a picture | Low |
+
+- A sound counts when the classifier's score for its kind passes a conservative threshold in 2 of 3 consecutive windows, at most once a minute per kind of sound and camera. Guardian's own warnings, the siren and your voice (and the 2 seconds after them) never count.
+- Each one is logged with the camera's picture, e.g. *Glass breaking heard on Porch (score 0.41)*. The score is the classifier's 0–1 confidence.
+- **While armed**, a high-severity sound set to alert raises that camera to level 3 and records, even with nobody on camera; the alert then follows Settings → Escalation (*Alert at level*, 3 by default) and says nobody has been seen yet. Nothing is spoken until someone is seen, and if nobody is, the alarm clears 30 seconds after the last such sound. Other sounds set to alert record a 20-second clip and alert you.
+- **While disarmed**, a smoke or fire alarm and a crying baby set to alert still alert you, for safety. Everything else is only logged.
+- If recognition is off, the optional `mediapipe` package is missing, the model can't be downloaded or the phone page is an old copy, the loud-sound check above covers the camera instead.
+
+Recorded and synthetic test sounds were recognised (a breaking glass recording and a beeping smoke alarm both scored about 0.4 through a phone page), but how well it works depends on the phone's microphone, the distance and the room; check the event log after setting it up.
+
+### Guard Bot
+
+During an intrusion (an unrecognised person on a phone camera, while armed; not during a panic or an alarm raised only by a sound), Guardian listens to what the person says and answers them. Settings → **Guard Bot**:
+
+- **Answer people who speak during an intrusion** (on by default; needs the optional `faster-whisper` package).
+- **Speech-to-text model**: `tiny.en` (75 MB, the default), `base.en` (145 MB) or `small.en` (484 MB), run on the CPU. It is downloaded on first use, or with **Download model** (with progress), into `backend/storage/models/speech-<model>/`.
+- **Your instructions**: facts the replies may use, e.g. *Deliveries go to the side door*.
+
+How it works:
+
+1. While the incident lasts and the phone's microphone is on, the phone streams it (about 32 kB/s). Speech is found by loudness against the background, up to 8 seconds at a time. Guardian's own voice, the siren and your voice are skipped, and so is the rest of any sentence they interrupted.
+2. Each utterance is transcribed on this computer and logged: *Person said: "I am just looking for the delivery box."* Audio is never saved.
+3. The language model writes **one short sentence** that answers it, from facts that are true right now: the camera, the local time, the threat level, whether video is recording, whether you were really alerted, whether the siren sounds, the conversation so far and your instructions. It is checked like the warnings (no police, guards or weapons, no recording or alert that didn't happen, no names, no repeats) and also must not invite them in, say who is home, or mention a schedule your instructions don't. A rejected reply gets one retry, then the pre-written line the escalation would say next is used. Replies are logged as *Replied: …*.
+4. It is spoken through the camera's speaker, at most once every 6 seconds, never while Guardian is already speaking or you are talking through the camera, and not at all once the incident ends.
+
+The Live page shows a **Conversation** panel for that camera during the incident, with what the person said and what Guardian answered. **Say instead…** speaks your own words through the camera (the same as typing a message under Controls), and Guardian then doesn't answer what you already answered.
+
+On a busy 4-core computer, transcribing a 3-second sentence with `tiny.en` took under a second, and a reply from the default 3B language model 30–40 seconds; a smaller model or a GPU answers sooner, and pre-written lines are used whenever the model is unavailable. Small speech-to-text models mishear some words ("delivery marks" for "delivery box"), so the transcript is shown as heard.
 
 Browsers only allow the microphone on a secure page, so to talk, open the dashboard at `http://localhost:<port>` on the Guardian computer, or over https (a reverse proxy, a tunnel or a codespace). The camera tile shows a small microphone and level while a phone's microphone is live.
 
@@ -190,7 +236,7 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/` (face, sound recognition and speech-to-text models, downloaded on first use), `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 
