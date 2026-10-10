@@ -22,7 +22,14 @@ function Step({ n, title, children, done }: { n: number; title: string; children
     <Card
       title={
         <span className="flex items-center gap-2">
-          <span className={cx('flex h-5 w-5 items-center justify-center rounded-full text-[11px]', done ? 'bg-emerald-600 text-white' : 'bg-zinc-700 text-zinc-200')}>{n}</span>
+          <span
+            className={cx(
+              'flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
+              done ? 'bg-emerald-600 text-white' : 'bg-zinc-700 text-zinc-200',
+            )}
+          >
+            {n}
+          </span>
           {title}
         </span>
       }
@@ -103,7 +110,10 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
       <Step n={1} title="Floorplan" done={!!info.image}>
         <p className="mb-4 text-sm text-zinc-400">{describe}</p>
         <div className="grid gap-5 md:grid-cols-2">
-          <Field label="A picture of the property from above" hint="A plan, a drawing or an aerial photo, as PNG or JPEG up to 10 MB. It stays on this computer.">
+          <Field
+            label="A picture of the property from above"
+            hint="A plan, a drawing or an aerial photo, as PNG or JPEG up to 10 MB. It stays on this computer."
+          >
             <input
               ref={file}
               type="file"
@@ -121,9 +131,25 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
           </Field>
           <Field label="Or a blank grid" hint="Squares of 1 m. Useful when you have no plan; draw nothing, just place the cameras.">
             <div className="flex flex-wrap items-center gap-2">
-              <input className="input w-20" type="number" min={5} max={400} value={grid.width} onChange={(e) => setGrid({ ...grid, width: Number(e.target.value) })} aria-label="Width in metres" />
+              <input
+                className="input w-20"
+                type="number"
+                min={5}
+                max={400}
+                value={grid.width}
+                onChange={(e) => setGrid({ ...grid, width: Number(e.target.value) })}
+                aria-label="Width in metres"
+              />
               <span className="text-zinc-500">×</span>
-              <input className="input w-20" type="number" min={5} max={400} value={grid.height} onChange={(e) => setGrid({ ...grid, height: Number(e.target.value) })} aria-label="Height in metres" />
+              <input
+                className="input w-20"
+                type="number"
+                min={5}
+                max={400}
+                value={grid.height}
+                onChange={(e) => setGrid({ ...grid, height: Number(e.target.value) })}
+                aria-label="Height in metres"
+              />
               <span className="text-xs text-zinc-500">m</span>
               <Button
                 icon={<Grid3x3 className="h-4 w-4" />}
@@ -141,7 +167,13 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
               variant="ghost"
               icon={<Trash2 className="h-4 w-4" />}
               onClick={() =>
-                setPending({ title: 'Remove the map?', message: 'The floorplan and every camera’s place on it are deleted.', label: 'Remove', success: 'Map removed', run: mapApi.remove })
+                setPending({
+                  title: 'Remove the map?',
+                  message: 'The floorplan and every camera’s place on it are deleted.',
+                  label: 'Remove',
+                  success: 'Map removed',
+                  run: mapApi.remove,
+                })
               }
             >
               Remove the map
@@ -169,7 +201,16 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
                 {scaling.length === 2 && (
                   <label className="flex items-center gap-2 text-sm text-zinc-300">
                     Distance
-                    <input className="input w-24" type="number" min={0.1} step={0.1} autoFocus value={distance} onChange={(e) => setDistance(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveScale()} />
+                    <input
+                      className="input w-24"
+                      type="number"
+                      min={0.1}
+                      step={0.1}
+                      autoFocus
+                      value={distance}
+                      onChange={(e) => setDistance(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveScale()}
+                    />
                     m
                   </label>
                 )}
@@ -198,10 +239,28 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
                 {info.cameras.map(
                   (c) =>
                     c.calibration && (
-                      <polygon key={c.id} points={c.calibration.field.map((p) => p.join(',')).join(' ')} fill="#38bdf8" fillOpacity={0.1} stroke="#38bdf8" strokeOpacity={0.4} strokeWidth={k} />
+                      <polygon
+                        key={c.id}
+                        points={c.calibration.field.map((p) => p.join(',')).join(' ')}
+                        fill="#38bdf8"
+                        fillOpacity={0.1}
+                        stroke="#38bdf8"
+                        strokeOpacity={0.4}
+                        strokeWidth={k}
+                      />
                     ),
                 )}
-                {line.length === 2 && <line x1={line[0][0]} y1={line[0][1]} x2={line[1][0]} y2={line[1][1]} stroke="#fbbf24" strokeWidth={2.5 * k} strokeDasharray={`${6 * k} ${4 * k}`} />}
+                {line.length === 2 && (
+                  <line
+                    x1={line[0][0]}
+                    y1={line[0][1]}
+                    x2={line[1][0]}
+                    y2={line[1][1]}
+                    stroke="#fbbf24"
+                    strokeWidth={2.5 * k}
+                    strokeDasharray={`${6 * k} ${4 * k}`}
+                  />
+                )}
                 {line.map(([x, y], i) => (
                   <circle key={i} cx={x} cy={y} r={6 * k} fill="#fbbf24" stroke="#09090b" strokeWidth={1.5 * k} />
                 ))}
@@ -214,8 +273,8 @@ export default function MapSetup({ info, onChange }: { info: MapInfo; onChange: 
       {info.image && (
         <Step n={3} title="Cameras" done={placed.length > 0}>
           <p className="mb-3 text-sm text-zinc-400">
-            For each camera, mark 4 or more spots on the ground in its picture and the same spots on the map. Guardian then works out where people
-            stand from where their feet are in the picture.
+            For each camera, mark 4 or more spots on the ground in its picture and the same spots on the map. Guardian then works out where people stand from
+            where their feet are in the picture.
           </p>
           {!info.metres_per_px && <p className="mb-3 text-sm text-amber-400">Set the scale first, so positions and speeds come out in metres.</p>}
           <ul className="divide-y divide-zinc-800">

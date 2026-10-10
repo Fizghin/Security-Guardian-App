@@ -157,8 +157,8 @@ export default function MapCalibration({
         }
       >
         <p className="-mt-1 mb-3 text-sm text-zinc-400">
-          Pick spots on the ground that are easy to find in both pictures, such as the corners of a path, a doormat or the foot of a post, and
-          spread them over the area the camera sees. Only people standing on that ground are placed correctly.
+          Pick spots on the ground that are easy to find in both pictures, such as the corners of a path, a doormat or the foot of a post, and spread them over
+          the area the camera sees. Only people standing on that ground are placed correctly.
         </p>
         <div className="grid gap-3 lg:grid-cols-2">
           <div>
@@ -216,7 +216,14 @@ export default function MapCalibration({
               {(k) => (
                 <>
                   {current?.cal && (
-                    <polygon points={current.cal.field.map((p) => p.join(',')).join(' ')} fill="#38bdf8" fillOpacity={0.15} stroke="#38bdf8" strokeOpacity={0.6} strokeWidth={1.5 * k} />
+                    <polygon
+                      points={current.cal.field.map((p) => p.join(',')).join(' ')}
+                      fill="#38bdf8"
+                      fillOpacity={0.15}
+                      stroke="#38bdf8"
+                      strokeOpacity={0.6}
+                      strokeWidth={1.5 * k}
+                    />
                   )}
                   {spots.map(
                     (s, i) =>
@@ -224,7 +231,16 @@ export default function MapCalibration({
                         <g key={i} data-key={`spot-${i}`} className="cursor-move">
                           <circle cx={s.map[0]} cy={s.map[1]} r={16 * k} fill="transparent" />
                           <circle cx={s.map[0]} cy={s.map[1]} r={11 * k} fill={color(i)} stroke="white" strokeWidth={2 * k} />
-                          <text x={s.map[0]} y={s.map[1]} dy="0.35em" textAnchor="middle" fontSize={11 * k} fontWeight={600} fill="white" className="pointer-events-none">
+                          <text
+                            x={s.map[0]}
+                            y={s.map[1]}
+                            dy="0.35em"
+                            textAnchor="middle"
+                            fontSize={11 * k}
+                            fontWeight={600}
+                            fill="white"
+                            className="pointer-events-none"
+                          >
                             {i + 1}
                           </text>
                         </g>
@@ -246,8 +262,8 @@ export default function MapCalibration({
                 <p>4 pairs always fit exactly, so there is no accuracy to show yet. Add a fifth pair to check it.</p>
               ) : (
                 <p>
-                  Typical error: <span className="font-medium text-zinc-100">{metres(current.cal.error)}</span> between where the pairs were marked and
-                  where the calibration puts them.
+                  Typical error: <span className="font-medium text-zinc-100">{metres(current.cal.error)}</span> between where the pairs were marked and where
+                  the calibration puts them.
                 </p>
               )}
               {current.cal.outliers.map((i) => (

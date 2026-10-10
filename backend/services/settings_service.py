@@ -364,6 +364,13 @@ def _migrate(overrides: dict) -> dict:
                 except (TypeError, ValueError) as exc:
                     print(f"[settings] Dropping a zone of camera {cam.get('id')}: {exc}")
             cam["zones"] = kept
+        pairs = cam.get("map_points") if isinstance(cam, dict) else None
+        if pairs:
+            try:
+                clean_pairs(pairs)
+            except (TypeError, ValueError) as exc:
+                print(f"[settings] Taking camera {cam.get('id')} off the property map: {exc}")
+                cam["map_points"] = []
     return overrides
 
 

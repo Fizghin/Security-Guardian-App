@@ -1,3 +1,4 @@
+import json
 import time
 
 import cv2
@@ -95,6 +96,13 @@ def test_map_points_in_settings_are_validated(tmp_path):
     with pytest.raises(SettingsError):
         svc.update({"map": {"scale_line": [1, 2, 3]}})
     assert SettingsService(tmp_path / "settings.json").get().camera("cam1").map_points == svc.get().camera("cam1").map_points
+    # points saved by another version that are no longer valid take the camera off the map, nothing more
+    data = json.loads((tmp_path / "settings.json").read_text())
+    data["cameras"][0]["map_points"] = good[:3]
+    data["detection"] = {"interval_ms": 700}
+    (tmp_path / "settings.json").write_text(json.dumps(data))
+    reloaded = SettingsService(tmp_path / "settings.json").get()
+    assert reloaded.camera("cam1").map_points == [] and reloaded.detection.interval_ms == 700
 
 
 # ---- the live map with a fake clock -------------------------------------------------------

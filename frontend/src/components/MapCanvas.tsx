@@ -23,7 +23,12 @@ function toMap(v: View, s: Size, clientX: number, clientY: number): Point {
 /** A metre length that reads well (1, 2, 5, 10…) for a scale bar about `target` metres long. */
 function niceMetres(target: number) {
   const base = 10 ** Math.floor(Math.log10(target))
-  return [1, 2, 5, 10].map((f) => f * base).filter((m) => m <= target).pop() ?? base
+  return (
+    [1, 2, 5, 10]
+      .map((f) => f * base)
+      .filter((m) => m <= target)
+      .pop() ?? base
+  )
 }
 
 /**
@@ -200,7 +205,13 @@ export default function MapCanvas({
         <button type="button" className="p-1.5 text-zinc-300 hover:bg-zinc-800" onClick={zoomButton(1.5)} aria-label="Zoom out" title="Zoom out">
           <Minus className="h-4 w-4" />
         </button>
-        <button type="button" className="p-1.5 text-zinc-300 hover:bg-zinc-800" onClick={() => setView(home)} aria-label="Show the whole map" title="Show the whole map">
+        <button
+          type="button"
+          className="p-1.5 text-zinc-300 hover:bg-zinc-800"
+          onClick={() => setView(home)}
+          aria-label="Show the whole map"
+          title="Show the whole map"
+        >
           <Maximize className="h-4 w-4" />
         </button>
       </div>

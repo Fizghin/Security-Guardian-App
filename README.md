@@ -9,6 +9,7 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Two-way audio**: hold a button to talk through a camera's speaker, listen to what a phone camera hears, and get alerts for loud sounds such as breaking glass or a slammed door.
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
+- **Property map**: a live view from above of where everyone is across all cameras, on your floorplan, with trails, walking speed and a 10-minute replay.
 - **Repeat visitors**: Guardian remembers strangers' faces and tells you when someone comes back ("seen before: 3 visits, last Tue 23:10"). Name them, or turn them into insiders in one click.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
@@ -172,6 +173,26 @@ How it works: each tracked stranger keeps the best look at their face (sharp, la
 
 **Privacy.** Turning this on means Guardian keeps photos of the faces of everyone it doesn't recognise while armed, including neighbours, delivery people and passers-by your cameras can see. Only people standing in a camera's detection zones count. Everything stays on this computer, in `backend/storage/visitors/` and the event database; nothing is uploaded. Visitors are forgotten 90 days after they were last seen (*Forget visitors after*, 0 keeps them until you forget them), and nothing is remembered while disarmed. Check the rules where you live before recording people outside your own property, and turn it off with **Remember strangers' faces** (Settings → Detection) if you don't need it. Turning it off keeps the visitors already remembered until they expire or you forget them.
 
+## Property map
+
+The Map page shows where people are from above, on a plan of your property, across all cameras at once. A dot is green for an insider (with their name), red for someone not recognised (or a remembered visitor's name) and amber while they are being identified. Each dot has a fading trail of the last 30 seconds and its speed once they move. Click or tap a dot to see which cameras see them and what each makes of them. Drag with the mouse or one finger to move around, and zoom with the wheel, two fingers or the buttons.
+
+**Setting it up** (Map → Set up, also reached from Settings → Property map):
+
+1. **Floorplan.** Upload a plan, drawing or aerial photo of the property seen from straight above (PNG or JPEG up to 10 MB), or use a blank grid of 1 m squares if you have none.
+2. **Scale.** Click two points whose distance you know, such as the ends of a wall, and type the distance in metres. A blank grid already has its scale.
+3. **Cameras.** For each camera, click a spot on the ground in its picture and then the same spot on the map, at least 4 times: corners of a path, a doormat, the foot of a post. The pairs are numbered alike on both sides and can be dragged. Spread them over the ground the camera sees. From 4 pairs on, Guardian shows how well they fit (the typical error in metres; with exactly 4 pairs the fit is always perfect, so add a fifth to check) and shades the ground the camera sees on the map. A pair that doesn't fit the others is pointed out and left out. Pairs that lie on one line, coincide, or would show the picture mirror-image (for example left and right swapped) are refused with the reason.
+
+**How it works.** Each camera's calibration is a perspective transform (a homography) from its picture to the map. The point where a person stands, the bottom middle of their box as for detection zones, goes through it onto the map and is smoothed, which also gives their speed. Sightings are then joined into people:
+
+- Two cameras seeing someone within 1.5 m of the same spot at the same moment (half a second apart at most) see one person.
+- Someone who leaves one camera's view and appears in another's, or is lost and found again by the same camera, keeps their number if they could have walked there at 3 m/s or less, within 10 seconds.
+- A recognised face decides: an insider's name or a remembered visitor stays with that person on the map, two people recognised as different people are never joined, and a face matching someone lost a moment ago picks up their number wherever they reappear.
+
+**Limits.** Positions are only right for people standing on the flat ground the pairs were picked on, and only as accurate as the calibration: someone on stairs or a deck, or whose feet are hidden or cut off by the bottom of the picture, is placed where their visible lower edge meets the ground. The map only covers the ground up to about twice as far as the farthest pair. Only people a camera counts (inside its detection zones) appear; a test intrusion does not. If a camera is moved, or its picture changes shape, place it again. The map doesn't raise alarms itself; each camera still decides those on its own.
+
+**Replay.** Drag the *Replay last 10 minutes* slider back to see where people went (one position a second), or press play to watch at four times the speed. Positions are kept in memory for 30 minutes and are lost when Guardian restarts; nothing about the map's people is written to disk.
+
 ## Alerts
 
 Settings → **Notifications** sends alerts with a picture when someone reaches the alert level (level 3 by default), followed by the clip once it is saved. Use any combination:
@@ -190,7 +211,7 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `map/` (the property map's floorplan picture), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`; also the map's scale and each camera's calibration points) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

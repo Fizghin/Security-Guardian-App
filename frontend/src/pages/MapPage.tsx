@@ -14,6 +14,38 @@ const TRAIL_SECONDS = 30
 const STILL = 0.3 // m/s; slower counts as standing still
 
 type Shown = Pick<MapPerson, 'id' | 'x' | 'y' | 'label' | 'status' | 'trail'> & { speed: number | null; live?: MapPerson }
+type CameraMark = { id: string; name: string; field: [number, number][]; at: [number, number] }
+
+/** Camera icons just behind the nearest ground each camera sees, so people standing there stay
+ * visible; cameras whose icons would overlap share one. `k` is map pixels per screen pixel. */
+function cameraIcons(cameras: CameraMark[], k: number) {
+  const icons: { x: number; y: number; names: string[] }[] = []
+  for (const c of cameras) {
+    const cx = c.field.reduce((t, p) => t + p[0], 0) / (c.field.length || 1)
+    const cy = c.field.reduce((t, p) => t + p[1], 0) / (c.field.length || 1)
+    const len = Math.hypot(c.at[0] - cx, c.at[1] - cy) || 1
+    const x = c.at[0] + ((c.at[0] - cx) / len) * 18 * k
+    const y = c.at[1] + ((c.at[1] - cy) / len) * 18 * k
+    const near = icons.find((i) => Math.hypot(i.x - x, i.y - y) < 24 * k)
+    if (near) near.names.push(c.name)
+    else icons.push({ x, y, names: [c.name] })
+  }
+  return icons
+}
+
+/** Where each person's label goes: above the dot, moved up while it would cover another label. */
+function labelSpots(people: Shown[], k: number) {
+  const placed: { x: number; y: number; w: number }[] = []
+  const spots = new Map<number, number>()
+  for (const p of [...people].sort((a, b) => b.y - a.y)) {
+    const w = (p.label.length + (p.speed !== null && p.speed >= STILL ? 8 : 0)) * 6.5 * k
+    let y = p.y - 15 * k
+    while (placed.some((b) => Math.abs(b.x - p.x) < (b.w + w) / 2 && Math.abs(b.y - y) < 14 * k)) y -= 14 * k
+    placed.push({ x: p.x, y, w })
+    spots.set(p.id, y)
+  }
+  return spots
+}
 
 /** People at `t` from the recorded samples: where each was last seen in the 2 s before, with their trail. */
 function replayAt(samples: HistorySample[], t: number, mpp: number): Shown[] {
@@ -140,10 +172,9 @@ function LiveMap({ info }: { info: MapInfo }) {
   if (playing && offset >= 0) setPlaying(false) // the replay caught up with now
 
   const now = replaying ? history.time + offset : (frame?.time ?? 0)
-  const people: Shown[] = replaying
-    ? replayAt(history.samples, now, mpp)
-    : (frame?.people ?? []).map((p) => ({ ...p, live: p }))
-  const cameras = frame?.cameras ?? info.cameras.filter((c) => c.calibration && c.enabled).map((c) => ({ id: c.id, name: c.name, ...c.calibration! }))
+  const people: Shown[] = replaying ? replayAt(history.samples, now, mpp) : (frame?.people ?? []).map((p) => ({ ...p, live: p }))
+  const cameras: CameraMark[] =
+    frame?.cameras ?? info.cameras.filter((c) => c.calibration && c.enabled).map((c) => ({ id: c.id, name: c.name, ...c.calibration! }))
   const chosen = people.find((p) => p.id === selected)
   const unplaced = info.cameras.filter((c) => c.enabled && !c.calibration)
 
@@ -156,51 +187,86 @@ function LiveMap({ info }: { info: MapInfo }) {
           className="h-[min(70vh,720px)] border border-zinc-800"
           onTap={(_, key) => setSelected(key?.startsWith('person-') ? Number(key.slice(7)) : null)}
         >
-          {(k) => (
-            <>
-              {cameras.map((c) => (
-                <g key={c.id}>
-                  <polygon points={c.field.map((p) => p.join(',')).join(' ')} fill="#38bdf8" fillOpacity={0.08} stroke="#38bdf8" strokeOpacity={0.35} strokeWidth={k} />
-                  <circle cx={c.at[0]} cy={c.at[1]} r={11 * k} fill="#0c4a6e" stroke="#38bdf8" strokeWidth={1.5 * k} />
-                  <Camera x={c.at[0] - 6.5 * k} y={c.at[1] - 6.5 * k} width={13 * k} height={13 * k} color="#e0f2fe" />
-                  <text x={c.at[0]} y={c.at[1] + 24 * k} textAnchor="middle" fontSize={11 * k} fill="#bae6fd" stroke="#09090b" strokeWidth={3 * k} paintOrder="stroke">
-                    {c.name}
-                  </text>
-                </g>
-              ))}
-              {people.map((p) => {
-                const points = [...p.trail.map(([x, y, t]) => [x, y, t]), [p.x, p.y, now]]
-                return (
-                  <g key={`trail-${p.id}`}>
-                    {points.slice(1).map(([x, y, t], i) => (
-                      <line
-                        key={i}
-                        x1={points[i][0]}
-                        y1={points[i][1]}
-                        x2={x}
-                        y2={y}
-                        stroke={STATUS_COLOR[p.status]}
-                        strokeOpacity={0.1 + 0.6 * Math.max(0, 1 - (now - t) / TRAIL_SECONDS)}
-                        strokeWidth={3 * k}
-                        strokeLinecap="round"
-                      />
-                    ))}
+          {(k) => {
+            const labels = labelSpots(people, k)
+            return (
+              <>
+                {cameras.map((c) => (
+                  <polygon
+                    key={c.id}
+                    points={c.field.map((p) => p.join(',')).join(' ')}
+                    fill="#38bdf8"
+                    fillOpacity={0.08}
+                    stroke="#38bdf8"
+                    strokeOpacity={0.35}
+                    strokeWidth={k}
+                  />
+                ))}
+                {cameraIcons(cameras, k).map((c) => (
+                  <g key={c.names.join()}>
+                    <circle cx={c.x} cy={c.y} r={11 * k} fill="#0c4a6e" stroke="#38bdf8" strokeWidth={1.5 * k} />
+                    <Camera x={c.x - 6.5 * k} y={c.y - 6.5 * k} width={13 * k} height={13 * k} color="#e0f2fe" />
+                    <text
+                      x={c.x}
+                      y={c.y + 24 * k}
+                      textAnchor="middle"
+                      fontSize={11 * k}
+                      fill="#bae6fd"
+                      stroke="#09090b"
+                      strokeWidth={3 * k}
+                      paintOrder="stroke"
+                    >
+                      {c.names.join(', ')}
+                    </text>
                   </g>
-                )
-              })}
-              {people.map((p) => (
-                <g key={p.id} data-key={`person-${p.id}`} className="cursor-pointer">
-                  <circle cx={p.x} cy={p.y} r={18 * k} fill="transparent" />
-                  {p.id === selected && <circle cx={p.x} cy={p.y} r={13 * k} fill="none" stroke="white" strokeWidth={2 * k} />}
-                  <circle cx={p.x} cy={p.y} r={8 * k} fill={STATUS_COLOR[p.status]} stroke="#09090b" strokeWidth={2 * k} />
-                  <text x={p.x} y={p.y - 15 * k} textAnchor="middle" fontSize={12 * k} fontWeight={600} fill="white" stroke="#09090b" strokeWidth={3 * k} paintOrder="stroke">
-                    {p.label}
-                    {p.speed !== null && p.speed >= STILL && <tspan fontWeight={400} fill="#d4d4d8">{` ${p.speed.toFixed(1)} m/s`}</tspan>}
-                  </text>
-                </g>
-              ))}
-            </>
-          )}
+                ))}
+                {people.map((p) => {
+                  const points = [...p.trail.map(([x, y, t]) => [x, y, t]), [p.x, p.y, now]]
+                  return (
+                    <g key={`trail-${p.id}`}>
+                      {points.slice(1).map(([x, y, t], i) => (
+                        <line
+                          key={i}
+                          x1={points[i][0]}
+                          y1={points[i][1]}
+                          x2={x}
+                          y2={y}
+                          stroke={STATUS_COLOR[p.status]}
+                          strokeOpacity={0.1 + 0.6 * Math.max(0, 1 - (now - t) / TRAIL_SECONDS)}
+                          strokeWidth={3 * k}
+                          strokeLinecap="round"
+                        />
+                      ))}
+                    </g>
+                  )
+                })}
+                {people.map((p) => (
+                  <g key={p.id} data-key={`person-${p.id}`} className="cursor-pointer">
+                    <circle cx={p.x} cy={p.y} r={18 * k} fill="transparent" />
+                    {p.id === selected && <circle cx={p.x} cy={p.y} r={13 * k} fill="none" stroke="white" strokeWidth={2 * k} />}
+                    <circle cx={p.x} cy={p.y} r={8 * k} fill={STATUS_COLOR[p.status]} stroke="#09090b" strokeWidth={2 * k} />
+                    {labels.get(p.id)! < p.y - 15 * k && (
+                      <line x1={p.x} y1={p.y - 8 * k} x2={p.x} y2={labels.get(p.id)! + 3 * k} stroke="#a1a1aa" strokeWidth={k} />
+                    )}
+                    <text
+                      x={p.x}
+                      y={labels.get(p.id)}
+                      textAnchor="middle"
+                      fontSize={12 * k}
+                      fontWeight={600}
+                      fill="white"
+                      stroke="#09090b"
+                      strokeWidth={3 * k}
+                      paintOrder="stroke"
+                    >
+                      {p.label}
+                      {p.speed !== null && p.speed >= STILL && <tspan fontWeight={400} fill="#d4d4d8">{` ${p.speed.toFixed(1)} m/s`}</tspan>}
+                    </text>
+                  </g>
+                ))}
+              </>
+            )
+          }}
         </MapCanvas>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-3">
@@ -217,11 +283,19 @@ function LiveMap({ info }: { info: MapInfo }) {
               disabled={!replaying}
               onClick={() => setPlaying(!playing)}
             />
-            <input type="range" min={-REPLAY_SECONDS} max={0} step={1} value={offset} aria-label="Replay position" onChange={(e) => {
-              const v = Number(e.target.value)
-              if (v < 0) startReplay(v)
-              else goLive()
-            }} />
+            <input
+              type="range"
+              min={-REPLAY_SECONDS}
+              max={0}
+              step={1}
+              value={offset}
+              aria-label="Replay position"
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (v < 0) startReplay(v)
+                else goLive()
+              }}
+            />
             <Button size="sm" variant={replaying ? 'primary' : 'ghost'} disabled={!replaying} onClick={goLive}>
               Live
             </Button>
@@ -275,8 +349,8 @@ function LiveMap({ info }: { info: MapInfo }) {
           </Card>
         )}
         <p className="px-1 text-xs text-zinc-500">
-          Positions are where people’s feet are, placed with each camera’s calibration, so they are as accurate as that calibration. Only people a
-          camera counts (inside its detection zones) appear.
+          Positions are where people’s feet are, placed with each camera’s calibration, so they are as accurate as that calibration. Only people a camera counts
+          (inside its detection zones) appear.
         </p>
       </div>
     </div>
@@ -304,7 +378,10 @@ export default function MapPage({ section }: { section: string }) {
             <li>Set the scale: click two points on the map and type how far apart they are.</li>
             <li>For each camera, click 4 or more spots on the ground in its picture and the same spots on the map.</li>
           </ol>
-          <a href={href('map', 'setup')} className="mt-4 inline-flex h-9 items-center rounded-md bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-500">
+          <a
+            href={href('map', 'setup')}
+            className="mt-4 inline-flex h-9 items-center rounded-md bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-500"
+          >
             Set up the map
           </a>
         </Empty>
