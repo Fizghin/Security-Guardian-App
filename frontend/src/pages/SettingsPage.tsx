@@ -415,6 +415,23 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
         <Slider label="Minimum person size" value={d.draft.min_person_height} min={0} max={90} format={(v) => `${v}% of frame`} onChange={(v) => d.set('min_person_height', v)} hint="Ignores people far away, e.g. on the street" />
         <Slider label="Check every" value={d.draft.interval_ms} min={100} max={5000} step={100} format={(v) => `${(v / 1000).toFixed(1)} s`} onChange={(v) => d.set('interval_ms', v)} hint="Shorter reacts faster; longer uses less CPU. Detection only runs when something moves." />
       </div>
+      <div className="space-y-4 border-t border-zinc-800 pt-4">
+        <Toggle checked={d.draft.motion_trails} onChange={(v) => d.set('motion_trails', v)} label="Motion trails" description="Draws where each person walked in the last few seconds on the live picture and in recordings." />
+        <Toggle
+          checked={d.draft.activity_heatmap}
+          onChange={(v) => d.set('activity_heatmap', v)}
+          label="Activity heatmaps"
+          description={
+            <>
+              Counts where people walk on each camera’s picture, to show busy paths on the{' '}
+              <a href={href('insights')} className="text-blue-400 hover:text-blue-300">
+                Insights
+              </a>{' '}
+              page. Only positions are kept, no pictures.
+            </>
+          }
+        />
+      </div>
       <div className="border-t border-zinc-800 pt-4">
         <Toggle checked={d.draft.face_recognition} onChange={(v) => d.set('face_recognition', v)} label="Recognise insiders by face" description="People added on the Insiders page won't trigger alarms. Downloads two small face models on first use." />
       </div>

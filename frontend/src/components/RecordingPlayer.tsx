@@ -1,9 +1,57 @@
-import { useState } from 'react'
-import { Download, Trash2 } from 'lucide-react'
-import { api, type Recording } from '../api'
-import { formatBytes, formatDateTime, formatDuration, reasonLabel } from '../lib/format'
+import { useEffect, useState } from 'react'
+import { Download, FileText, Trash2 } from 'lucide-react'
+import { api, type IncidentReport, type Recording } from '../api'
+import { eventLabel, formatBytes, formatDateTime, formatDuration, reasonLabel, SEVERITY_COLOR } from '../lib/format'
 import { errorMessage, useToast } from '../lib/toast'
+import IntegrityBadge from './IntegrityBadge'
 import { Button, ConfirmDialog, Modal } from './ui'
+
+/** What happened during the clip, and whether the file is still exactly as it was saved. */
+function IncidentPanel({ file }: { file: string }) {
+  const [report, setReport] = useState<IncidentReport | null>(null)
+  useEffect(() => {
+    let live = true
+    api.incidentReport(file).then((r) => live && setReport(r)).catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [file])
+  if (!report) return null
+  const shown = report.timeline.filter((e) => !['RECORDING', 'NOTIFICATION'].includes(e.event_type)).slice(0, 12)
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Summary</h3>
+          <IntegrityBadge result={report.integrity} />
+        </div>
+        <p className="text-sm leading-relaxed text-zinc-300">{report.summary}</p>
+        {report.integrity.sha256 && (
+          <p className="mt-2 break-all font-mono text-[11px] text-zinc-500" title="SHA-256 recorded when the clip was sealed">
+            SHA-256 {report.integrity.sha256}
+          </p>
+        )}
+      </div>
+      {shown.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Timeline</h3>
+          <ol className="relative space-y-2 border-l border-zinc-800 pl-4">
+            {shown.map((e) => (
+              <li key={e.id} className="relative text-sm">
+                <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-zinc-900" style={{ background: SEVERITY_COLOR[e.severity] }} />
+                <span className="font-mono text-xs tabular-nums text-zinc-500">{e.local_time}</span>{' '}
+                <span className="font-medium text-zinc-200">{eventLabel(e.event_type)}</span>
+                <span className="block truncate text-xs text-zinc-500" title={e.description}>
+                  {e.description}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const browserPlaysH264 = () => document.createElement('video').canPlayType('video/mp4; codecs="avc1.42E01E"') !== ''
 
@@ -77,6 +125,11 @@ export default function RecordingPlayer({
                 </Button>
               )}
               {!missing && (
+                <a href={api.incidentReportUrl(file)} target="_blank" rel="noreferrer">
+                  <Button icon={<FileText className="h-4 w-4" />}>Incident report</Button>
+                </a>
+              )}
+              {!missing && (
                 // download: a failed download must not replace the dashboard with an error page
                 <a href={api.recordingUrl(file, true)} download>
                   <Button icon={<Download className="h-4 w-4" />}>Download</Button>
@@ -113,6 +166,7 @@ export default function RecordingPlayer({
             </p>
           </div>
         )}
+        {!missing && <IncidentPanel file={file} />}
       </Modal>
       <ConfirmDialog
         open={confirm}

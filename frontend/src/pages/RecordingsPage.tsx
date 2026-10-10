@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Film, Play } from 'lucide-react'
+import { Film, Lock, Play } from 'lucide-react'
 import { api, type Recording } from '../api'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Badge, Card, Empty, ErrorNote } from '../components/ui'
@@ -51,6 +51,9 @@ export default function RecordingsPage() {
               ))}
             </select>
           )}
+          <a href={href('evidence')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
+            Evidence vault
+          </a>
           <a href={href('settings', 'recording')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
             Recording settings
           </a>
@@ -84,6 +87,11 @@ export default function RecordingsPage() {
             >
               <div className="relative aspect-video bg-black">
                 <Thumb rec={rec} />
+                {rec.sealed && (
+                  <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300" title="Sealed in the evidence vault">
+                    <Lock className="h-3 w-3" /> Sealed
+                  </span>
+                )}
                 <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-zinc-100">
                   {formatDuration(rec.duration)}
                 </span>

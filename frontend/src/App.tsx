@@ -5,6 +5,7 @@ import ToastProvider from './components/ToastProvider'
 import { PAGE_TITLES, useRoute } from './lib/route'
 import { StatusContext } from './lib/status'
 import { usePoll } from './lib/usePoll'
+import EvidencePage from './pages/EvidencePage'
 import InsidersPage from './pages/InsidersPage'
 import LivePage from './pages/LivePage'
 import RecordingsPage from './pages/RecordingsPage'
@@ -13,6 +14,7 @@ import VisitorsPage from './pages/VisitorsPage'
 
 // The chart library is large; load it only when the Events page is opened.
 const EventsPage = lazy(() => import('./pages/EventsPage'))
+const InsightsPage = lazy(() => import('./pages/InsightsPage'))
 
 export default function App() {
   const { page, section } = useRoute()
@@ -35,6 +37,12 @@ export default function App() {
             </Suspense>
           )}
           {page === 'recordings' && <RecordingsPage />}
+          {page === 'insights' && (
+            <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+              <InsightsPage />
+            </Suspense>
+          )}
+          {page === 'evidence' && <EvidencePage />}
           {page === 'insiders' && <InsidersPage />}
           {page === 'visitors' && <VisitorsPage />}
           {page === 'settings' && <SettingsPage section={section} />}

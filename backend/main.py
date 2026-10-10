@@ -22,7 +22,9 @@ from models.database import init_db  # noqa: E402
 from services.ai_service import ai_service  # noqa: E402
 from services.camera_service import camera_manager  # noqa: E402
 from services.event_service import event_service  # noqa: E402
+from services.evidence_service import evidence_vault  # noqa: E402
 from services.face_service import face_service  # noqa: E402
+from services.heatmap_service import heatmap_store  # noqa: E402
 from services.phone_service import ensure_certificate  # noqa: E402
 from services.recording_service import recording_library  # noqa: E402
 from services.settings_service import Settings, settings_service  # noqa: E402
@@ -79,12 +81,18 @@ async def _run_phone_listener(server: uvicorn.Server) -> None:
 async def lifespan(app: FastAPI):
     init_db()
     visitor_service.start()
+    # Every saved clip is sealed in the evidence vault; deletions are put on record.
+    recording_library.on_saved = evidence_vault.seal
+    recording_library.on_removed = evidence_vault.record_removal
     cfg = settings_service.get()
     removed = recording_library.prune(cfg.recording.retention_days)
     event_service.prune_snapshots(cfg.recording.retention_days)
     visitor_service.prune()
     if removed:
         event_service.log("SYSTEM", f"Deleted {removed} recording(s) older than {cfg.recording.retention_days} days")
+    backfilled = evidence_vault.seal_unsealed()
+    if backfilled:
+        event_service.log("SYSTEM", f"Sealed {backfilled} earlier recording(s) in the evidence vault")
     camera_manager.start()
     if cfg.detection.face_recognition:
         face_service.prepare_async()
@@ -109,6 +117,7 @@ async def lifespan(app: FastAPI):
         phone_server.should_exit = True
         await phone_task
     camera_manager.stop()
+    heatmap_store.save()
     siren_service.stop()
     event_service.log("SYSTEM", "Guardian stopped", "INFO")
 

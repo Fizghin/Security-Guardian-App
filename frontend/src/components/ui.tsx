@@ -57,7 +57,7 @@ export function Card({
   id?: string
 }) {
   return (
-    <section id={id} className={cx('rounded-lg border border-zinc-800 bg-zinc-900/60', className)}>
+    <section id={id} className={cx('rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-sm shadow-black/20', className)}>
       {(title || actions) && (
         <header className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2.5">
           {title && <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>}
@@ -296,4 +296,45 @@ export function Empty({ icon, title, children }: { icon?: ReactNode; title: stri
 
 export function ErrorNote({ children }: { children: ReactNode }) {
   return <div className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{children}</div>
+}
+
+export function StatTile({
+  label,
+  value,
+  detail,
+  icon,
+  tone = 'default',
+  href,
+}: {
+  label: string
+  value: ReactNode
+  detail?: ReactNode
+  icon?: ReactNode
+  tone?: 'default' | 'good' | 'warn' | 'bad'
+  href?: string
+}) {
+  const accent = {
+    default: 'text-zinc-400 bg-zinc-800/80',
+    good: 'text-emerald-300 bg-emerald-500/10',
+    warn: 'text-amber-300 bg-amber-500/10',
+    bad: 'text-red-300 bg-red-500/15',
+  }[tone]
+  const body = (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-zinc-400">{label}</span>
+        {icon && <span className={cx('rounded-md p-1.5', accent)}>{icon}</span>}
+      </div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-zinc-50">{value}</div>
+      {detail && <div className="mt-0.5 truncate text-xs text-zinc-500">{detail}</div>}
+    </>
+  )
+  const cls = 'block rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 transition-colors'
+  return href ? (
+    <a href={href} className={cx(cls, 'hover:border-zinc-600')}>
+      {body}
+    </a>
+  ) : (
+    <div className={cls}>{body}</div>
+  )
 }

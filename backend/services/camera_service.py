@@ -30,6 +30,7 @@ from services.brain_service import CameraBrain
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import face_service
+from services.heatmap_service import Trails, heatmap_store
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
@@ -56,7 +57,24 @@ RED, GREEN, AMBER, GREY, BLUE = (40, 40, 220), (90, 180, 60), (0, 170, 240), (15
 ZONE = (230, 230, 160)  # detection zone outlines, light cyan
 
 
-def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool, zones=()):
+TRAIL_COLORS = {"known": GREEN, "pending": BLUE, "test": AMBER}
+
+
+def draw_trails(frame, trails, armed: bool, thick: int) -> None:
+    """Where each person walked in the last seconds, fading towards the oldest point."""
+    h, w = frame.shape[:2]
+    for status, points in trails:
+        color = TRAIL_COLORS.get(status, RED if armed else GREY)
+        pts = [(int(x * w), int(y * h)) for x, y in points]
+        n = len(pts)
+        for i in range(1, n):
+            fade = 0.25 + 0.75 * i / (n - 1)
+            c = tuple(int(v * fade) for v in color)
+            cv2.line(frame, pts[i - 1], pts[i], c, max(1, round(thick * (0.5 + fade))), cv2.LINE_AA)
+        cv2.circle(frame, pts[-1], thick + 2, color, -1, cv2.LINE_AA)
+
+
+def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool, zones=(), trails=()):
     # Text and lines scale with the frame so labels stay readable on HD cameras.
     scale = max(0.5, frame.shape[1] / 1100)
     thick = max(1, round(scale * 1.5))
@@ -64,6 +82,8 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
     for zone in zones:
         points = np.array([[int(x * w), int(y * h)] for x, y in zone], dtype=np.int32)
         cv2.polylines(frame, [points], True, ZONE, thick, cv2.LINE_AA)
+    if trails:
+        draw_trails(frame, trails, armed, thick)
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.bbox)
         if d.simulated:
@@ -102,6 +122,7 @@ class CameraUnit:
         self._cfg = cfg
         self.source = self._make_source(cfg)
         self.tracker = Tracker()
+        self.trails = Trails()
         self.recorder = Recorder(cfg.id, self.name)
         self.audio = audio.relay(cfg.id)
         phone_send = (lambda cmd: hub.send(self.id, cmd)) if cfg.is_phone else None
@@ -269,7 +290,8 @@ class CameraUnit:
                     self._detect(frame, now, cfg, simulating)
 
                 shown = self._detections if now - self._detections_time < BOX_HOLD_SECONDS else []
-                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones)
+                trails = self.trails.lines(now) if cfg.detection.motion_trails else ()
+                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones, trails)
                 jpeg = self._encode(annotated)
                 with self._lock:
                     self._annotated, self._raw = annotated, frame
@@ -306,6 +328,10 @@ class CameraUnit:
         if remember:
             self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
+        h, w = frame.shape[:2]
+        self.trails.update(detections, w, h, now)
+        if det.activity_heatmap:
+            heatmap_store.add(self.id, detections, w, h, now)
         self._judging = [frame, detections, None]
         try:
             self.brain.process(detections, now)

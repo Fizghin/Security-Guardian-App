@@ -2,6 +2,18 @@
 
 Guardian is already an exceptional, privacy-first local security system. To make Guardian an **industry-defining, jaw-dropping AI security platform**, the following 7 hard-to-implement, cutting-edge features are proposed. Each feature includes technical architecture, algorithms, local hardware requirements, and implementation strategies.
 
+## Status
+
+| # | Feature | Status |
+|---|---|---|
+| 1 | 3D spatial trajectory radar | **Partly built**: per-camera footstep heatmaps (Insights → *Where people walk*) and live motion trails. Cross-camera homography and ReID are still open. |
+| 2 | Visual anomaly sentinel | Open |
+| 3 | Two-way AI "Guard Bot" | Open (two-way talk exists; speech-to-text is the missing piece) |
+| 4 | Acoustic incident engine | Partly built earlier: loud-sound alerts from phone microphones. Sound classification is still open. |
+| 5 | Incident forensic digest | **Built**: incident reports with summary, timeline, pictures and integrity proof, printable as PDF. |
+| 6 | Tamper-proof evidence vault | **Built**: SHA-256 + hash-chained, Ed25519-signed ledger, one-click verification, recorded deletions. |
+| 7 | Predictive behavioural analytics & heatmaps | **Built**: Insights page with threat score, weekday × hour map, night-activity anomaly check, per-camera breakdown, findings and spatial heatmaps. |
+
 ---
 
 ## 1. Multi-Camera 3D Spatial Trajectory Radar & Homography Fusion

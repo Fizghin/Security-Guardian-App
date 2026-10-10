@@ -216,3 +216,20 @@ def test_live_video_socket_ends_when_the_dashboard_leaves():
         await asyncio.wait_for(api_module.ws_stream(WebSocket(scope, receive, send), "no-such-camera"), 3)
 
     asyncio.run(visit())
+
+
+def test_evidence_insights_and_heatmap_endpoints(client):
+    ev = client.get("/api/evidence").json()
+    assert ev["chain"]["ok"] and ev["fingerprint"].count(":") == 5
+    audit = client.post("/api/evidence/audit").json()
+    assert audit["chain"]["ok"] and "clips" in audit
+    assert "BEGIN PUBLIC KEY" in client.get("/api/evidence/public-key.pem").text
+    assert client.get("/api/evidence/ledger.jsonl").status_code == 200
+    ins = client.get("/api/insights?days=7").json()
+    assert len(ins["grid"]) == 7 and len(ins["hours"]) == 24 and "threat" in ins
+    heat = client.get("/api/cameras/cam1/heatmap").json()
+    assert heat["cols"] == 48 and heat["rows"] == 27
+    assert client.delete("/api/cameras/cam1/heatmap").json() == {"ok": True}
+    for path in ("/api/recordings/nope.mp4/verify", "/api/recordings/nope.mp4/report",
+                 "/api/recordings/nope.mp4/report.html"):
+        assert client.get(path).status_code == 404

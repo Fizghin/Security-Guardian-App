@@ -82,6 +82,10 @@ class DetectionSettings(BaseModel):
     visitor_retention_days: int = Field(90, ge=0, le=3650, description="0 = keep forever")
     # A sighting this long after the visitor was last seen counts as a new visit.
     visit_gap_minutes: int = Field(30, ge=0, le=1440)
+    # Draw where each person walked in the last few seconds on the live picture and in clips.
+    motion_trails: bool = True
+    # Count where people walk on each camera's picture for the Insights page.
+    activity_heatmap: bool = True
 
 
 class EscalationSettings(BaseModel):

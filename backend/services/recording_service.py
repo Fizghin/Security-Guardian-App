@@ -85,6 +85,9 @@ class RecordingLibrary:
         self.dir = directory
         self.ffmpeg = find_ffmpeg()
         self.in_progress: set[str] = set()
+        # Evidence vault hooks: a clip was saved (its path) / removed (its name, why)
+        self.on_saved: Callable[[Path], None] | None = None
+        self.on_removed: Callable[[str, str], None] | None = None
         if not self.ffmpeg:
             print("[rec] FFmpeg not found; clips will use OpenCV's MPEG-4 encoder")
 
@@ -137,6 +140,11 @@ class RecordingLibrary:
         video = self.path(name)
         for suffix in (".mp4", ".jpg", ".json"):
             video.with_suffix(suffix).unlink(missing_ok=True)
+        self._removed(video.name, "deleted from the dashboard")
+
+    def _removed(self, name: str, reason: str) -> None:
+        if self.on_removed:
+            self.on_removed(name, reason)
 
     def prune(self, retention_days: int) -> int:
         removed = 0
@@ -146,6 +154,7 @@ class RecordingLibrary:
                 if not f.name.endswith(".part.mp4") and f.stat().st_mtime < cutoff:
                     for suffix in (".mp4", ".jpg", ".json"):
                         f.with_suffix(suffix).unlink(missing_ok=True)
+                    self._removed(f.name, f"older than the {retention_days}-day retention period")
                     removed += 1
         # Leftovers from a crash mid-recording.
         for f in self.dir.glob("*.part.mp4"):
@@ -321,9 +330,18 @@ class Recorder:
         cur["part"].replace(final)
         self.library.in_progress.discard(cur["file"])
         print(f"[rec:{self.camera_id}] Saved {final.name} ({meta['duration']}s)")
+        info = {**meta, "file": final.name, "path": str(final)}
+        threading.Thread(target=self._after_save, args=(final, info), daemon=True).start()
+
+    def _after_save(self, final: Path, info: dict) -> None:
+        # Off the sampler thread: hashing a long clip takes a moment. Sealed before the owner gets it.
+        if self.library.on_saved:
+            try:
+                self.library.on_saved(final)
+            except Exception as exc:
+                print(f"[rec:{self.camera_id}] Sealing failed: {exc}")
         if self.on_finished:
-            info = {**meta, "file": final.name, "path": str(final)}
-            threading.Thread(target=self.on_finished, args=(info,), daemon=True).start()
+            self.on_finished(info)
 
     def _sample_loop(self) -> None:
         next_tick = time.time()

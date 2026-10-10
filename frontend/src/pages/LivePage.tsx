@@ -1,11 +1,11 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
+import { Activity, Camera, FlaskConical, Gauge, LayoutGrid, Lock, Megaphone, ShieldCheck, ShieldOff, Square } from 'lucide-react'
 import { api, type CameraStatus, type SecurityEvent, type Status } from '../api'
 import EventRow, { EventPicture } from '../components/EventRow'
 import LiveAudio from '../components/LiveAudio'
 import LiveVideo from '../components/LiveVideo'
 import RecordingPlayer from '../components/RecordingPlayer'
-import { Button, Card, Empty } from '../components/ui'
+import { Button, Card, Empty, StatTile } from '../components/ui'
 import { cx } from '../lib/cx'
 import { formatDuration, LEVELS, timeAgo } from '../lib/format'
 import { href } from '../lib/route'
@@ -218,6 +218,48 @@ function Controls({ camera, status }: { camera: CameraStatus; status: Status }) 
   )
 }
 
+const THREAT_TONE = { calm: 'good', low: 'default', elevated: 'warn', high: 'bad' } as const
+
+function Overview({ status }: { status: Status }) {
+  const { data: insights } = usePoll(() => api.insights(30), 30000)
+  const { data: vault } = usePoll(() => api.evidence(), 60000)
+  const live = status.cameras.filter((c) => c.connected).length
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatTile
+        label="System"
+        value={status.armed ? 'Armed' : 'Disarmed'}
+        detail={status.armed ? 'People on camera raise alarms' : 'Detections are ignored'}
+        icon={status.armed ? <ShieldCheck className="h-4 w-4" /> : <ShieldOff className="h-4 w-4" />}
+        tone={status.armed ? 'good' : 'warn'}
+      />
+      <StatTile
+        label="Cameras live"
+        value={`${live}/${status.cameras.length}`}
+        detail={live < status.cameras.length ? `${status.cameras.length - live} without video` : 'All sending video'}
+        icon={<Camera className="h-4 w-4" />}
+        tone={live < status.cameras.length ? 'warn' : 'default'}
+      />
+      <StatTile
+        label="Threat score · 24 h"
+        value={insights ? insights.threat.score : '–'}
+        detail={insights ? `${insights.last_24h.incidents} incident${insights.last_24h.incidents === 1 ? '' : 's'} · ${insights.threat.level}` : 'Loading…'}
+        icon={insights?.threat.score ? <Gauge className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+        tone={insights ? THREAT_TONE[insights.threat.level] : 'default'}
+        href={href('insights')}
+      />
+      <StatTile
+        label="Evidence vault"
+        value={vault ? vault.sealed : '–'}
+        detail={vault ? (vault.chain.ok ? 'sealed clips · chain intact' : 'chain broken: check now') : 'Loading…'}
+        icon={<Lock className="h-4 w-4" />}
+        tone={vault && !vault.chain.ok ? 'bad' : 'default'}
+        href={href('evidence')}
+      />
+    </div>
+  )
+}
+
 export default function LivePage() {
   const { status } = useStatus()
   const { data: events } = usePoll(() => api.events({}, 15), 3000)
@@ -251,81 +293,84 @@ export default function LivePage() {
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="min-w-0 space-y-4">
-        {cameras.length > 1 && (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-zinc-400">
-              {cameras.filter((c) => c.connected).length} of {cameras.length} cameras live
-            </span>
-            <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
-              {(
-                [
-                  ['grid', LayoutGrid, 'All cameras'],
-                  ['single', Square, 'One camera'],
-                ] as const
-              ).map(([value, Icon, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => changeLayout(value)}
-                  title={label}
-                  className={cx('flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium', layout === value ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {selected && (cameras.length === 1 || layout === 'single') && (
-          <>
-            <LiveVideo camera={selected} />
-            {cameras.length > 1 && (
-              <div className="grid grid-cols-3 gap-2 lg:grid-cols-4">
-                {cameras.filter((c) => c.id !== selected.id).map((c) => (
-                  <LiveVideo key={c.id} camera={c} compact onSelect={() => select(c.id)} />
+    <div className="space-y-4">
+      {status && <Overview status={status} />}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-4">
+          {cameras.length > 1 && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-zinc-400">
+                {cameras.filter((c) => c.connected).length} of {cameras.length} cameras live
+              </span>
+              <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
+                {(
+                  [
+                    ['grid', LayoutGrid, 'All cameras'],
+                    ['single', Square, 'One camera'],
+                  ] as const
+                ).map(([value, Icon, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => changeLayout(value)}
+                    title={label}
+                    className={cx('flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium', layout === value ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200')}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </button>
                 ))}
               </div>
-            )}
-          </>
-        )}
-        {selected && cameras.length > 1 && layout === 'grid' && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {cameras.map((c) => (
-              <LiveVideo key={c.id} camera={c} compact={cameras.length > 2} selected={c.id === selected.id} onSelect={() => select(c.id)} />
-            ))}
-          </div>
-        )}
-
-        {status && selected && <Controls camera={selected} status={status} />}
-      </div>
-
-      <div className="space-y-4">
-        {status && selected && <CameraCard camera={selected} status={status} />}
-        <Card
-          title="Recent activity"
-          actions={
-            <a href={href('events')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
-              All events
-            </a>
-          }
-          bodyClassName="p-0"
-        >
-          {events && events.items.length === 0 ? (
-            <Empty title="No events yet" />
-          ) : (
-            <ul className="max-h-[32rem] divide-y divide-zinc-800/80 overflow-y-auto">
-              {events?.items.map((e) => <EventRow key={e.id} event={e} compact onOpenClip={setClip} onOpenPicture={setPicture} />)}
-            </ul>
+            </div>
           )}
-        </Card>
-      </div>
 
-      <EventPicture event={picture} onClose={() => setPicture(null)} onOpenClip={setClip} />
-      <RecordingPlayer key={clip ?? ''} file={clip} onClose={() => setClip(null)} />
+          {selected && (cameras.length === 1 || layout === 'single') && (
+            <>
+              <LiveVideo camera={selected} />
+              {cameras.length > 1 && (
+                <div className="grid grid-cols-3 gap-2 lg:grid-cols-4">
+                  {cameras.filter((c) => c.id !== selected.id).map((c) => (
+                    <LiveVideo key={c.id} camera={c} compact onSelect={() => select(c.id)} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {selected && cameras.length > 1 && layout === 'grid' && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {cameras.map((c) => (
+                <LiveVideo key={c.id} camera={c} compact={cameras.length > 2} selected={c.id === selected.id} onSelect={() => select(c.id)} />
+              ))}
+            </div>
+          )}
+
+          {status && selected && <Controls camera={selected} status={status} />}
+        </div>
+
+        <div className="space-y-4">
+          {status && selected && <CameraCard camera={selected} status={status} />}
+          <Card
+            title="Recent activity"
+            actions={
+              <a href={href('events')} className="text-xs font-medium text-blue-400 hover:text-blue-300">
+                All events
+              </a>
+            }
+            bodyClassName="p-0"
+          >
+            {events && events.items.length === 0 ? (
+              <Empty title="No events yet" />
+            ) : (
+              <ul className="max-h-[32rem] divide-y divide-zinc-800/80 overflow-y-auto">
+                {events?.items.map((e) => <EventRow key={e.id} event={e} compact onOpenClip={setClip} onOpenPicture={setPicture} />)}
+              </ul>
+            )}
+          </Card>
+        </div>
+
+        <EventPicture event={picture} onClose={() => setPicture(null)} onOpenClip={setClip} />
+        <RecordingPlayer key={clip ?? ''} file={clip} onClose={() => setClip(null)} />
+      </div>
     </div>
   )
 }

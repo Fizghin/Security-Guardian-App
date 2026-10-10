@@ -19,10 +19,14 @@ from services.camera_access import local_camera_blocked
 from services.camera_service import camera_manager
 from services.detection_service import detection_service
 from services.event_service import event_service
+from services.evidence_service import evidence_vault
 from services.face_service import FaceError, face_service
+from services.heatmap_service import heatmap_store
+from services.insights_service import insights as build_insights
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
+from services import report_service
 from services.schedule_service import time_zone
 from services.settings_service import PHONE_SOURCE, NotificationSettings, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
@@ -562,7 +566,9 @@ def clear_events():
 @router.get("/recordings")
 def list_recordings(camera: str = ""):
     active = [{"camera": u.name(), **u.recorder.status()} for u in camera_manager.units.values() if u.recorder.active]
-    return {"items": recording_library.list(camera or None), "usage_bytes": recording_library.usage_bytes(),
+    sealed = evidence_vault.sealed_files()
+    items = [{**r, "sealed": r["file"] in sealed} for r in recording_library.list(camera or None)]
+    return {"items": items, "usage_bytes": recording_library.usage_bytes(),
             "active": active, "encoder": recording_library.encoder}
 
 
@@ -584,6 +590,31 @@ def get_thumbnail(name: str):
         raise HTTPException(404, "Thumbnail not found")
 
 
+@router.get("/recordings/{name}/verify")
+def verify_recording(name: str):
+    try:
+        path = recording_library.path(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+    return evidence_vault.verify_clip(path.name)
+
+
+@router.get("/recordings/{name}/report")
+def recording_report(name: str):
+    try:
+        return report_service.build(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+
+
+@router.get("/recordings/{name}/report.html", response_class=HTMLResponse)
+def recording_report_html(name: str):
+    try:
+        return HTMLResponse(report_service.render_html(report_service.build(name)))
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+
+
 @router.delete("/recordings/{name}")
 def delete_recording(name: str):
     try:
@@ -592,6 +623,54 @@ def delete_recording(name: str):
         raise HTTPException(404, "Recording not found")
     except PermissionError as exc:
         raise HTTPException(409, str(exc))
+    return {"ok": True}
+
+
+# ---- evidence vault ----------------------------------------------------------------
+@router.get("/evidence")
+def evidence_status(limit: int = Query(100, ge=1, le=1000)):
+    entries = evidence_vault.entries()
+    return {**evidence_vault.status(), "chain": evidence_vault.verify_chain(),
+            "recent": list(reversed(entries[-limit:]))}
+
+
+@router.post("/evidence/audit")
+def evidence_audit():
+    return evidence_vault.audit()
+
+
+@router.post("/evidence/seal")
+def evidence_seal_unsealed():
+    return {"sealed": evidence_vault.seal_unsealed()}
+
+
+@router.get("/evidence/ledger.jsonl")
+def evidence_ledger():
+    body = "".join(json.dumps(e, sort_keys=True) + "\n" for e in evidence_vault.entries())
+    return Response(body, media_type="application/x-ndjson",
+                    headers={"Content-Disposition": 'attachment; filename="guardian-evidence-ledger.jsonl"'})
+
+
+@router.get("/evidence/public-key.pem")
+def evidence_public_key():
+    return Response(evidence_vault.public_key_pem(), media_type="application/x-pem-file",
+                    headers={"Content-Disposition": 'attachment; filename="guardian-evidence-key.pem"'})
+
+
+# ---- insights ---------------------------------------------------------------------
+@router.get("/insights")
+def insights(days: int = Query(30, ge=1, le=365)):
+    return build_insights(days)
+
+
+@router.get("/cameras/{camera_id}/heatmap")
+def camera_heatmap(camera_id: str):
+    return heatmap_store.get(camera_id)
+
+
+@router.delete("/cameras/{camera_id}/heatmap")
+def reset_camera_heatmap(camera_id: str):
+    heatmap_store.reset(camera_id)
     return {"ok": True}
 
 

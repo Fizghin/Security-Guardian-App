@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { BellOff, Film, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
+import { BarChart3, BellOff, Film, Lock, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
 import { api } from '../api'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatDuration, LEVELS } from '../lib/format'
@@ -9,14 +9,63 @@ import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
 import { Button, ConfirmDialog, Dot } from './ui'
 
-const NAV: { page: Page; label: string; icon: typeof Video }[] = [
-  { page: 'live', label: 'Live', icon: Video },
-  { page: 'events', label: 'Events', icon: ScrollText },
-  { page: 'recordings', label: 'Recordings', icon: Film },
-  { page: 'insiders', label: 'Insiders', icon: Users },
-  { page: 'visitors', label: 'Visitors', icon: UserSearch },
-  { page: 'settings', label: 'Settings', icon: SettingsIcon },
+const NAV: { group: string; items: { page: Page; label: string; icon: typeof Video }[] }[] = [
+  {
+    group: 'Monitor',
+    items: [
+      { page: 'live', label: 'Live', icon: Video },
+      { page: 'events', label: 'Events', icon: ScrollText },
+      { page: 'recordings', label: 'Recordings', icon: Film },
+    ],
+  },
+  {
+    group: 'Intelligence',
+    items: [
+      { page: 'insights', label: 'Insights', icon: BarChart3 },
+      { page: 'evidence', label: 'Evidence vault', icon: Lock },
+    ],
+  },
+  {
+    group: 'People',
+    items: [
+      { page: 'insiders', label: 'Insiders', icon: Users },
+      { page: 'visitors', label: 'Visitors', icon: UserSearch },
+    ],
+  },
+  { group: 'System', items: [{ page: 'settings', label: 'Settings', icon: SettingsIcon }] },
 ]
+
+function SystemCard() {
+  const { status } = useStatus()
+  if (!status) return null
+  const level = status.threat_level
+  const live = status.cameras.filter((c) => c.connected).length
+  const recording = status.cameras.filter((c) => c.recording.active).length
+  return (
+    <div
+      className={cx(
+        'mx-3 mt-3 rounded-xl border p-3',
+        level >= 3 || status.panic
+          ? 'border-red-800 bg-red-950/60'
+          : status.armed
+            ? 'border-emerald-900/70 bg-gradient-to-br from-emerald-950/60 to-zinc-900/40'
+            : 'border-zinc-800 bg-zinc-900/60',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="relative flex h-2.5 w-2.5">
+          {status.armed && <span className={cx('absolute inline-flex h-full w-full animate-ping rounded-full opacity-60', LEVELS[level].bg)} />}
+          <span className={cx('relative inline-flex h-2.5 w-2.5 rounded-full', status.armed ? LEVELS[level].bg : 'bg-zinc-600')} />
+        </span>
+        <span className="text-sm font-semibold text-zinc-100">{status.panic ? 'Panic alarm' : status.armed ? (level ? LEVELS[level].label : 'Armed · all clear') : 'Disarmed'}</span>
+      </div>
+      <div className="mt-1.5 text-xs text-zinc-400">
+        {live} of {status.cameras.length} camera{status.cameras.length === 1 ? '' : 's'} live
+        {recording > 0 && <span className="text-red-300"> · {recording} recording</span>}
+      </div>
+    </div>
+  )
+}
 
 function Meter({ label, value, detail }: { label: string; value: number; detail: string }) {
   return (
@@ -44,13 +93,15 @@ function Sidebar({ page, open, onClose }: { page: Page; open: boolean; onClose: 
       <div className={cx('fixed inset-0 z-30 bg-black/60 lg:hidden', open ? 'block' : 'hidden')} onClick={onClose} />
       <aside
         className={cx(
-          'fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-zinc-800 bg-zinc-950 transition-transform lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-zinc-800 bg-zinc-950 transition-transform lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         <div className="flex h-14 items-center justify-between border-b border-zinc-800 px-4">
-          <div className="flex items-center gap-2 font-semibold">
-            <Shield className="h-5 w-5 text-zinc-300" />
+          <div className="flex items-center gap-2.5 font-semibold tracking-tight">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-900/40">
+              <Shield className="h-4 w-4 text-white" />
+            </span>
             Guardian
           </div>
           <button type="button" className="rounded p-1 text-zinc-400 hover:bg-zinc-800 lg:hidden" onClick={onClose} aria-label="Close menu">
@@ -58,20 +109,31 @@ function Sidebar({ page, open, onClose }: { page: Page; open: boolean; onClose: 
           </button>
         </div>
 
-        <nav className="flex-1 space-y-0.5 p-2">
-          {NAV.map(({ page: p, label, icon: Icon }) => (
-            <a
-              key={p}
-              href={href(p)}
-              onClick={onClose}
-              className={cx(
-                'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
-                p === page ? 'bg-zinc-800 font-medium text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100',
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </a>
+        <SystemCard />
+
+        <nav className="flex-1 space-y-4 overflow-y-auto p-3">
+          {NAV.map(({ group, items }) => (
+            <div key={group}>
+              <div className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">{group}</div>
+              <div className="space-y-0.5">
+                {items.map(({ page: p, label, icon: Icon }) => (
+                  <a
+                    key={p}
+                    href={href(p)}
+                    onClick={onClose}
+                    aria-current={p === page ? 'page' : undefined}
+                    className={cx(
+                      'relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors',
+                      p === page ? 'bg-zinc-800/80 font-medium text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100',
+                    )}
+                  >
+                    {p === page && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-blue-500" />}
+                    <Icon className={cx('h-4 w-4', p === page && 'text-blue-400')} />
+                    {label}
+                  </a>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -126,7 +188,7 @@ function TopBar({ page, onMenu }: { page: Page; onMenu: () => void }) {
   const schedule = status && describeSchedule(status.schedule, status.armed)?.short
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800 px-4">
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur">
       <button type="button" className="-ml-1 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 lg:hidden" onClick={onMenu} aria-label="Open menu">
         <Menu className="h-5 w-5" />
       </button>

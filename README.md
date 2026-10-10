@@ -14,6 +14,10 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
 - **Dashboard**: live view, event log with filters, chart and CSV export (detections, escalations, alerts and recognised people keep a picture of the moment, linked to the clip recorded at the time), recording library, insider and visitor management, settings and system diagnostics. Arm/disarm, panic button, typed or spoken messages through a camera's speaker and a one-click test intrusion.
+- **Insights**: a 0–100 threat score for the last 24 hours with the reasons behind it, a weekday × hour map of when incidents happen, night-activity checks against an average night, per-camera breakdowns and plain-language findings ("Front door sees 53% of all incidents").
+- **Where people walk**: per-camera heatmaps of everyone's footsteps drawn over the camera picture, with the busiest spots marked, and **motion trails** on the live picture and in clips showing where each person came from.
+- **Evidence vault**: every saved clip is fingerprinted with SHA-256 into an append-only, hash-chained ledger signed with an Ed25519 key that never leaves the computer. One click proves each clip is byte-for-byte unchanged; edits, trims, silent deletions or a rewritten ledger are flagged.
+- **Incident reports**: each clip gets a summary, a second-by-second timeline with pictures and its integrity proof, as a printable page (Print / Save as PDF).
 - Monitoring runs in the background whether or not the dashboard is open.
 
 ## Requirements
@@ -187,6 +191,14 @@ Settings → **Notifications** sends alerts with a picture when someone reaches 
 **Send test** sends a small test picture through every channel that is on, the same way real alerts go out, and shows the result for each one. On and Off show what is saved; a channel with edits says *Unsaved* until you press Save, and **Remove** clears a saved token or address when you save.
 
 Tokens, passwords and webhook addresses are stored in `backend/storage/settings.json` and never sent back to the dashboard. They can also be preset in `backend/.env` (see `.env.template`); an address there that isn't a valid web address is ignored with a warning when Guardian starts. Error messages from the receiving servers are shown without your tokens and addresses, and HTML error pages are left out.
+
+## Insights and the evidence vault
+
+**Insights** works from the event log, in this computer's time zone, so it covers history from before it existed. An *incident* is an unrecognised person appearing while armed; test intrusions don't count. *Night* is 22:00–06:00. The threat score adds up what happened in the last 24 hours (siren, owner alerts, the panic button, more night incidents than usual, loud sounds, cameras going offline) and lists each reason.
+
+*Where people walk* counts the point where each detected person's feet are, at most once a second per person, on a 48 × 27 grid per camera (`storage/heatmaps.json`; positions only, no pictures). **Reset** starts a camera's count again, e.g. after moving it. Settings → Detection turns heatmaps and motion trails on or off.
+
+The **Evidence vault** page seals clips automatically as they are saved, and clips saved before it existed when Guardian starts. **Verify all clips** recomputes every hash: *Verified* means the file is unchanged, *Tampered* that the video or its details changed, *Missing* that a sealed clip vanished without being deleted through Guardian. Deleting a clip, by hand or through the retention period, is itself recorded. **Download ledger** and **Download public key** let anyone check the signatures independently. Each clip's **Incident report** (in its player) shows the same check with the file's SHA-256, which can be compared with `sha256sum`, `shasum -a 256` or `certutil -hashfile`. The signing key is `storage/evidence/signing.key`: back it up with the ledger, and keep it private.
 
 ## Where data lives
 

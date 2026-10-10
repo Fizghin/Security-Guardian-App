@@ -194,6 +194,117 @@ export interface Recording {
   camera_id: string | null
   camera: string | null
   thumbnail: boolean
+  /** Sealed in the evidence vault */
+  sealed?: boolean
+}
+
+export type IntegrityStatus = 'verified' | 'tampered' | 'unsealed' | 'missing' | 'removed'
+
+export interface ClipIntegrity {
+  file: string
+  status: IntegrityStatus
+  detail: string
+  sealed_at?: string
+  removed_at?: string
+  seq?: number
+  sha256?: string
+  current_sha256?: string
+  backfilled?: boolean
+  signature_ok?: boolean
+}
+
+export interface LedgerEntry {
+  seq: number
+  time: string
+  action: 'sealed' | 'removed'
+  file: string
+  sha256?: string
+  size?: number
+  reason?: string
+  backfilled?: boolean
+  hash: string
+  prev: string
+}
+
+export interface ChainCheck {
+  ok: boolean
+  entries: number
+  problems: { seq: number; problem: string }[]
+  head: string
+}
+
+export interface EvidenceStatus {
+  entries: number
+  sealed: number
+  fingerprint: string
+  head: string
+  chain: ChainCheck
+  recent: LedgerEntry[]
+}
+
+export interface EvidenceAudit {
+  ok: boolean
+  chain: ChainCheck
+  clips: ClipIntegrity[]
+  counts: Partial<Record<IntegrityStatus, number>>
+  unsealed: string[]
+  checked_at: string
+}
+
+export interface IncidentReport {
+  file: string
+  camera: string
+  reason: string
+  reason_label: string
+  started: string
+  ended: string
+  duration: number
+  max_level: number
+  summary: string
+  stats: {
+    warnings: number
+    alerts: number
+    siren: boolean
+    returning_visitor: boolean
+    insiders: string[]
+    lasted: number | null
+    first_seen: string | null
+    escalations: { offset: number; level: number; label: string }[]
+    pictures: number
+    peak_level: number
+  }
+  timeline: (SecurityEvent & { offset: number; local_time: string })[]
+  integrity: ClipIntegrity
+  fingerprint: string
+  generated: string
+}
+
+export interface Insights {
+  days: number
+  generated: string
+  time_zone: string
+  weekdays: string[]
+  grid: number[][]
+  grid_max: number
+  hours: number[]
+  series: { date: string; incidents: number; alerts: number; sounds: number }[]
+  cameras: { camera: string; incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; offline: number }[]
+  totals: { incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; returning: number; offline: number }
+  last_24h: { incidents: number; alerts: number; sirens: number; sounds: number; night_incidents: number }
+  night: { start: number; end: number; last_night: number; baseline: number; ratio: number }
+  threat: { score: number; level: 'calm' | 'low' | 'elevated' | 'high'; reasons: string[] }
+  findings: { kind: 'info' | 'warning' | 'alert'; text: string }[]
+}
+
+export interface Heatmap {
+  cols: number
+  rows: number
+  grid: number[][]
+  max: number
+  samples: number
+  strangers: number
+  since: number | null
+  hotspots: { x: number; y: number; share: number; where: string }[]
 }
 
 export interface RecordingList {
@@ -295,6 +406,8 @@ export interface Settings {
     remember_visitors: boolean
     visitor_retention_days: number
     visit_gap_minutes: number
+    motion_trails: boolean
+    activity_heatmap: boolean
   }
   escalation: {
     level2_after: number
@@ -483,7 +596,20 @@ export const api = {
   thumbnailUrl: (file: string) => `/api/recordings/${encodeURIComponent(file)}/thumbnail`,
   // The file name makes the URL unique per picture: ids start again at 1 after the log is cleared.
   eventSnapshotUrl: (event: SecurityEvent) => `/api/events/${event.id}/snapshot.jpg?v=${encodeURIComponent(event.snapshot ?? '')}`,
+  verifyRecording: (file: string) => request<ClipIntegrity>(`/api/recordings/${encodeURIComponent(file)}/verify`),
+  incidentReport: (file: string) => request<IncidentReport>(`/api/recordings/${encodeURIComponent(file)}/report`),
+  incidentReportUrl: (file: string) => `/api/recordings/${encodeURIComponent(file)}/report.html`,
   deleteRecording: (file: string) => request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(file)}`, { method: 'DELETE' }),
+
+  evidence: () => request<EvidenceStatus>('/api/evidence'),
+  evidenceAudit: () => request<EvidenceAudit>('/api/evidence/audit', json('POST')),
+  sealUnsealed: () => request<{ sealed: number }>('/api/evidence/seal', json('POST')),
+  ledgerUrl: '/api/evidence/ledger.jsonl',
+  publicKeyUrl: '/api/evidence/public-key.pem',
+
+  insights: (days: number) => request<Insights>(`/api/insights?days=${days}`),
+  heatmap: (id: string) => request<Heatmap>(`${cam(id)}/heatmap`),
+  resetHeatmap: (id: string) => request<{ ok: boolean }>(`${cam(id)}/heatmap`, { method: 'DELETE' }),
 
   insiders: () => request<InsiderList>('/api/insiders'),
   addInsiderPhotos: (name: string, files: File[]) => {
