@@ -365,6 +365,17 @@ class AIService:
         self.rejected += 1
         raise AIError(f"Model reply rejected ({problem})")
 
+    def ask(self, messages: list[dict], temperature: float = 0.7) -> tuple[str, str]:
+        """One request to the configured model for other spoken lines (the Guard Bot's replies).
+        Returns (cleaned reply, model); raises AIError or httpx errors like the warnings do."""
+        cfg = self.settings.get().ai
+        model = self.resolve_model(cfg)
+        return clean_response(self._chat(cfg, model, messages, temperature)), model
+
+    def submit(self, job: Callable[[], None]) -> None:
+        """Runs a job on the model's worker, in turn with the warnings."""
+        self._executor.submit(job)
+
     # ---- generation ----------------------------------------------------
     def generate_warning(self, ctx: WarningContext) -> dict:
         cfg = self.settings.get().ai

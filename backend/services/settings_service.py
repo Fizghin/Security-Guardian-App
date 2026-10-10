@@ -65,6 +65,21 @@ class CameraConfig(BaseModel):
         return self
 
 
+SoundAction = Literal["off", "log", "alert"]
+
+
+class SoundActions(BaseModel):
+    """What to do when a kind of sound is recognised: ignore it, log it with a picture, or also alert."""
+    glass: SoundAction = "alert"
+    alarm: SoundAction = "alert"
+    scream: SoundAction = "alert"
+    gunshot: SoundAction = "alert"
+    banging: SoundAction = "log"
+    dog: SoundAction = "log"
+    baby: SoundAction = "alert"
+    siren: SoundAction = "log"
+
+
 class DetectionSettings(BaseModel):
     confidence: float = Field(0.5, ge=0.1, le=0.95)
     min_person_height: int = Field(10, ge=0, le=90, description="% of frame height")
@@ -77,6 +92,10 @@ class DetectionSettings(BaseModel):
     # Loud sounds heard by phone cameras: logged with a picture, or also recorded and alerted while armed.
     sound_alerts: Literal["off", "log", "alert"] = "log"
     sound_sensitivity: int = Field(5, ge=1, le=10)
+    # Sound recognition: phone cameras stream their microphone to a local classifier, which tells
+    # breaking glass from a barking dog. The loud-sound check above covers cameras it can't serve.
+    sound_recognition: bool = True
+    sound_actions: SoundActions = SoundActions()
     # Repeat visitors: remember strangers' faces while armed and recognise them when they return.
     remember_visitors: bool = True
     visitor_retention_days: int = Field(90, ge=0, le=3650, description="0 = keep forever")
@@ -123,6 +142,10 @@ class AISettings(BaseModel):
     voice_rate: int = Field(165, ge=80, le=300)
     greet_insiders: bool = False
     greet_cooldown_minutes: int = Field(60, ge=1, le=1440)
+    # Guard Bot: during an intrusion, transcribe what the person says and answer them.
+    guard_bot: bool = True
+    stt_model: Literal["tiny.en", "base.en", "small.en"] = "tiny.en"
+    owner_instructions: str = Field("", max_length=300)
 
 
 class PhoneSettings(BaseModel):

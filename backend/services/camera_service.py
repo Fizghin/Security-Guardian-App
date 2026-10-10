@@ -6,7 +6,9 @@ Each enabled camera runs as a CameraUnit with its own background loop:
   frame -> motion check -> person detection -> face evidence -> tracker
         -> remembered visitors -> CameraBrain (escalation) -> annotated frame (live view + recorder)
 
-A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts).
+A phone camera's microphone goes to its SoundRecognizer (recognised sounds) and,
+during an intrusion, its GuardBot (answers what the person says). Its levels go
+to the SoundMonitor (loud-sound alerts) while sound recognition can't run.
 
 The CameraManager creates and removes units as settings change, and handles
 what applies to the whole system: arming, the panic button, resetting, the
@@ -30,12 +32,14 @@ from services.brain_service import CameraBrain
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import face_service
+from services.guard_bot import GuardBot
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
 from services.schedule_service import AppliedEvent, last_event, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
+from services.sound_recognition import SoundRecognizer
 from services.sound_service import SoundMonitor
 from services.sources import CaptureSource, parse_source
 from services.talk_service import audio_hub
@@ -113,6 +117,13 @@ class CameraUnit:
         self.sound.snapshot = self.snapshot
         self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
         self.sound.incident_active = lambda: self.brain.incident_active
+        self.sounds = SoundRecognizer(self.name, self.audio, self.brain, self.recorder, settings=settings,
+                                      notifier=notifier, events=events)
+        self.sounds.snapshot = self.snapshot
+        self.sounds.own_sound = self.sound.own_sound
+        self.guard = GuardBot(self.name, self.brain, self.audio, settings=settings, events=events)
+        self.guard.own_sound = self.sound.own_sound
+        self.audio.analyse = self._analyse
 
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
@@ -167,6 +178,9 @@ class CameraUnit:
         self._running.clear()
         if self._thread:
             self._thread.join(timeout=5)
+        self.audio.analyse = None
+        self.audio.want("sounds", False)
+        self.audio.want("speech", False)
         self.brain.reset("Camera stopped")
         self.recorder.shutdown()
         self.source.stop()
@@ -337,11 +351,19 @@ class CameraUnit:
             if self.notifier.send_alert(f"Camera offline: {self.name()}", msg, "HIGH"):
                 self.events.log("ALERT", f"Owner alerted: {msg}", "HIGH", camera=self.name())
 
+    def _analyse(self, chunk: bytes) -> None:
+        """Microphone audio the server asked the phone for, on the event loop: only queued for the workers."""
+        self.sounds.feed(chunk)
+        self.guard.feed(chunk)
+
     def _check_sound(self, now: float) -> None:
         try:
+            recognising = self.sounds.tick(now)
             for when, db in self.audio.take_levels():
-                self.sound.feed(db, when)
+                if not recognising:  # recognition covers loud sounds too
+                    self.sound.feed(db, when)
             self.sound.tick(now)
+            self.guard.tick(now)
         except Exception as exc:  # keep the camera running
             print(f"[camera:{self.id}] Sound check failed: {exc}")
 
@@ -369,6 +391,8 @@ class CameraUnit:
             **self.brain.status(),
             "recording": self.recorder.status(),
             "zones_mismatch": self.zones_mismatch(),
+            "sound_recognition": self.sounds.active and self.audio.streaming(),
+            "guard_bot": self.guard.status(),
         }
 
 
