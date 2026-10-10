@@ -52,7 +52,6 @@ class _FFmpegWriter:
 
     def close(self) -> bool:
         try:
-            self.proc.stdin.close()
             _, err = self.proc.communicate(timeout=60)
         except Exception:
             self.proc.kill()
