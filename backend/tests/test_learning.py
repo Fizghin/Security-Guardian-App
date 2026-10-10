@@ -538,7 +538,7 @@ def test_api(client, env):
     assert client.post("/api/events/999999999/feedback", json={"verdict": None}).status_code == 404
 
     overview = client.get("/api/learning").json()
-    assert overview["settings"] == {"learn_from_feedback": True, "improve_faces": True}
+    assert overview["settings"] == {"learn_from_feedback": True, "improve_faces": True, "unusual_activity": "alert"}
     assert overview["rules"]["still_minutes"] == 10 and overview["feedback"]["days"] == 30
     garden = next(c for c in overview["feedback"]["cameras"] if c["camera"] == "Garden")
     assert garden["false_alarm"] >= 1

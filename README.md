@@ -11,6 +11,7 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
 - **Repeat visitors**: Guardian remembers strangers' faces and tells you when someone comes back ("seen before: 3 visits, last Tue 23:10"). Name them, or turn them into insiders in one click.
 - **Learns from you**: mark a detection *False alarm* and Guardian ignores that still thing in that spot, while anyone who moves or shows their face is still detected. It also suggests spots for things that never move and keeps new looks at insiders' faces to recognise them better. Everything it learned can be seen and undone on the Learning page.
+- **Usual hours**: Guardian learns when people are normally in view of each camera and flags a stranger at a time it is usually quiet ("Garden is usually quiet on Tuesdays around 3 am"), with an alert straight away.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
@@ -193,6 +194,17 @@ Guardian learns from your answers, and gets better at recognising the people who
 
 **Settings → Learning** has *Learn from my feedback* (on by default; when off, your answers are kept but teach nothing) and *Improve insider recognition by itself* (on by default). Removing a camera also removes its spots and suggestions. Clearing the event log keeps what was learned, but answers on the deleted events can no longer be undone.
 
+## Usual hours
+
+Guardian learns each camera's routine: for every hour of the week (Mon–Sun, in the Guardian computer's local time, following daylight saving time) it counts the minutes the camera was watching and the minutes someone was in view, everyone and unrecognised people separately. Older weeks count less (half as much after 4 weeks), so it follows a routine that changes. It learns whether or not Guardian is armed.
+
+- **Unusual activity.** When an incident starts while armed, Guardian checks how often people are usually around at that time: that hour, the hours either side, and the same hour on the other weekdays (or the other weekend day), which count less. If people were there in under 2.5% of the minutes watched, the detection says so, e.g. *2 unrecognised people detected. Unusual: Garden is usually quiet on Tuesdays around 3 am.*, has severity Medium instead of Low, and shows an *Unusual* badge in the event log.
+- **Still learning.** Nothing is called unusual until Guardian has watched for at least 3 days (each with at least an hour of watching) and for at least 3 hours around that time.
+- **Settings → Learning → Unusual activity**: *Mark it and alert me straight away* (the default) also sends you an alert with the picture as soon as the person is detected, without waiting for the alert level, at most every 10 minutes per camera; the usual alerts follow as the incident escalates. *Mark it as unusual in the event log* only words the detection; *Ignore* turns it off.
+- **Learning page → Routine** shows a camera's week as a grid coloured by how often people are there, with hatched hours that haven't been watched enough to judge yet, a marker for now and the numbers for each hour (hover, or tap on a phone): e.g. *Tue 03:00–04:00: people in 0 of 12 hours watched*. It also lists the busiest and usually quiet times in words and says what is expected right now. **Reset** forgets what was learned for that camera.
+
+A minute counts as watched when the camera was online and its pictures were being checked for people; time offline or with the person detector unavailable doesn't count. The API is `GET /api/cameras/{id}/routine` (the grid, which hours are judged with confidence, the busy and quiet times, and what is expected now) and `DELETE /api/cameras/{id}/routine` to reset.
+
 ## Alerts
 
 Settings → **Notifications** sends alerts with a picture when someone reaches the alert level (level 3 by default), followed by the clip once it is saved. Use any combination:
@@ -211,7 +223,7 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos; the ones Guardian learned itself start with `learned-` and have a `.json` saying where and when), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `learning/` (`spots.json`: ignored spots, suggestions and dismissed places; `set_aside/`: learned photos removed with *Not name*, kept until that answer is cleared or the event log is cleared), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos; the ones Guardian learned itself start with `learned-` and have a `.json` saying where and when), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `learning/routine/` (each camera's learned usual hours, one file per camera, saved every 5 minutes and when Guardian stops, deleted with the camera), `learning/` (`spots.json`: ignored spots, suggestions and dismissed places; `set_aside/`: learned photos removed with *Not name*, kept until that answer is cleared or the event log is cleared), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

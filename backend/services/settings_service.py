@@ -131,6 +131,9 @@ class LearningSettings(BaseModel):
     learn_from_feedback: bool = True
     # Adds new looks at an insider's face, from sightings where they were clearly recognised.
     improve_faces: bool = True
+    # Strangers at a time a camera is usually quiet: "log" words the detection as unusual, "alert"
+    # also alerts the owner straight away while armed.
+    unusual_activity: Literal["off", "log", "alert"] = "alert"
 
 
 class PhoneSettings(BaseModel):
@@ -235,8 +238,8 @@ class Settings(BaseModel):
     ai: AISettings = AISettings()
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
-    notifications: NotificationSettings = NotificationSettings()
     learning: LearningSettings = LearningSettings()
+    notifications: NotificationSettings = NotificationSettings()
 
     @field_validator("cameras")
     @classmethod

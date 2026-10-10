@@ -65,6 +65,8 @@ export interface CameraStatus {
   recording: { active: boolean; file: string | null; started: number | null; stopping: boolean }
   /** The picture changed shape since the zones were drawn (e.g. a phone turned on its side). */
   zones_mismatch: boolean
+  /** The camera's learned routine; unusual_now while an incident that started at a usually quiet time goes on. */
+  routine: { learning: boolean; days_watched: number; days_needed: number; unusual_now: boolean }
 }
 
 export interface Status {
@@ -405,7 +407,7 @@ export interface Settings {
   }
   phone: { fps: number; max_width: number; quality: number }
   schedule: { enabled: boolean; rules: ScheduleRule[] }
-  learning: { learn_from_feedback: boolean; improve_faces: boolean }
+  learning: { learn_from_feedback: boolean; improve_faces: boolean; unusual_activity: 'off' | 'log' | 'alert' }
   notifications: {
     discord_webhook_set: boolean
     telegram_token_set: boolean
@@ -421,6 +423,27 @@ export interface Settings {
     /** Channels the saved settings are complete for; the server decides, the same way it does when sending. */
     configured: NotificationChannel[]
   }
+}
+
+/** A camera's learned routine: 7 rows (Mon-Sun) of 24 hours, in the Guardian computer's local time. */
+export interface RoutineReport {
+  camera_id: string
+  name: string
+  mode: Settings['learning']['unusual_activity']
+  days_watched: number
+  days_needed: number
+  observed_minutes: number[][]
+  people_minutes: number[][]
+  stranger_minutes: number[][]
+  /** people_minutes / observed_minutes; null where the camera never watched */
+  share: (number | null)[][]
+  /** What a detection at that time is judged by: the hour, its neighbours and similar days */
+  expected: (number | null)[][]
+  /** Enough was watched around that time to judge it */
+  confident: boolean[][]
+  summary: string[]
+  now: { day: number; hour: number; expected: number | null; confident: boolean; unusual: boolean }
+  unusual_below: number
 }
 
 export type NotificationChannel = 'discord' | 'telegram' | 'ntfy' | 'webhook' | 'email'
@@ -546,6 +569,8 @@ export const api = {
   testIntrusion: (id: string, seconds: number) =>
     request<{ ok: boolean; seconds: number }>(`${cam(id)}/test-intrusion`, json('POST', { seconds })),
   cameraFaces: (id: string) => request<{ faces: LiveFace[] }>(`${cam(id)}/faces`),
+  routine: (id: string) => request<RoutineReport>(`${cam(id)}/routine`),
+  resetRoutine: (id: string) => request<{ ok: boolean }>(`${cam(id)}/routine`, { method: 'DELETE' }),
   snapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg`,
   rawSnapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg?raw=1&t=${Date.now()}`,
   streamUrl: (id: string) => socketUrl(`/ws/stream/${encodeURIComponent(id)}`),

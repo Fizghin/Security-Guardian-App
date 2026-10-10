@@ -478,7 +478,7 @@ function LearningSection({ value, save }: { value: Settings['learning']; save: S
       title="Learning"
       description={
         <>
-          See and undo what Guardian has learned on the{' '}
+          Guardian learns when people are usually in view of each camera, and from your answers. See and undo what it has learned on the{' '}
           <a href={href('learning')} className="text-blue-400 hover:text-blue-300">
             Learning page
           </a>
@@ -501,6 +501,16 @@ function LearningSection({ value, save }: { value: Settings['learning']; save: S
         label="Improve insider recognition by itself"
         description="When an insider is recognised clearly, Guardian keeps a new look at their face (another angle or light): at most one every 10 minutes and 12 per person. They are marked “Learned” on the Insiders page, where you can remove them."
       />
+      <Field
+        label="Unusual activity"
+        hint="An unrecognised person at an hour when a camera usually sees nobody, while armed. Judged only after Guardian has watched for 3 days and for 3 hours around that time. The alert comes as soon as they are detected, without waiting for the alert level, at most every 10 minutes per camera."
+      >
+        <select className="input" value={d.draft.unusual_activity} onChange={(e) => d.set('unusual_activity', e.target.value as Settings['learning']['unusual_activity'])}>
+          <option value="off">Ignore</option>
+          <option value="log">Mark it as unusual in the event log</option>
+          <option value="alert">Mark it and alert me straight away</option>
+        </select>
+      </Field>
     </Section>
   )
 }
