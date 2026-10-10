@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 
-export type Page = 'live' | 'events' | 'recordings' | 'insiders' | 'visitors' | 'settings'
-const PAGES: Page[] = ['live', 'events', 'recordings', 'insiders', 'visitors', 'settings']
+export type Page = 'live' | 'map' | 'events' | 'recordings' | 'insiders' | 'visitors' | 'settings'
+const PAGES: Page[] = ['live', 'map', 'events', 'recordings', 'insiders', 'visitors', 'settings']
 
 export const PAGE_TITLES: Record<Page, string> = {
   live: 'Live',
+  map: 'Map',
   events: 'Events',
   recordings: 'Recordings',
   insiders: 'Insiders',

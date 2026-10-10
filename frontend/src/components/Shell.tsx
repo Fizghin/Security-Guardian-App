@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { BellOff, Film, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
+import { BellOff, Film, Map as MapIcon, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
 import { api } from '../api'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatDuration, LEVELS } from '../lib/format'
@@ -11,6 +11,7 @@ import { Button, ConfirmDialog, Dot } from './ui'
 
 const NAV: { page: Page; label: string; icon: typeof Video }[] = [
   { page: 'live', label: 'Live', icon: Video },
+  { page: 'map', label: 'Map', icon: MapIcon },
   { page: 'events', label: 'Events', icon: ScrollText },
   { page: 'recordings', label: 'Recordings', icon: Film },
   { page: 'insiders', label: 'Insiders', icon: Users },

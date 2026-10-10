@@ -13,6 +13,7 @@ import VisitorsPage from './pages/VisitorsPage'
 
 // The chart library is large; load it only when the Events page is opened.
 const EventsPage = lazy(() => import('./pages/EventsPage'))
+const MapPage = lazy(() => import('./pages/MapPage'))
 
 export default function App() {
   const { page, section } = useRoute()
@@ -29,6 +30,11 @@ export default function App() {
       <StatusContext.Provider value={statusValue}>
         <Shell page={page}>
           {page === 'live' && <LivePage />}
+          {page === 'map' && (
+            <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+              <MapPage section={section} />
+            </Suspense>
+          )}
           {page === 'events' && (
             <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
               <EventsPage />

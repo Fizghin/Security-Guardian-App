@@ -227,10 +227,10 @@ class PropertyMap:
         """Two sightings that can't be the same person."""
         if _differ(a.identity, b.identity):
             return True
+        if a.camera == b.camera:
+            return a.seen == b.seen  # one camera sees them as two people in the same detection run
         if abs(a.seen - b.seen) > SAME_MOMENT:
             return False
-        if a.camera == b.camera:
-            return True  # one camera sees them as two people
         t = max(a.seen, b.seen)
         return _dist(a.at(t), b.at(t)) > SPLIT_METRES
 
@@ -244,28 +244,34 @@ class PropertyMap:
         return False
 
     def _match(self, s: Sighting, members: dict[int, list[Sighting]]) -> int | None:
-        """The person a new sighting belongs to, if any."""
+        """The person a new sighting belongs to, if any. Being in the same place at the same moment is
+        the strongest evidence, then a recognised face that could have walked there, then the face
+        alone, then walking distance alone."""
         best, best_score = None, math.inf
         for pid, p in self._people.items():
             ms = members.get(pid, [])
             if _differ(s.identity, p.identity) or any(self._apart(s, m) for m in ms if m.camera == s.camera
                                                       or _differ(s.identity, m.identity)):
                 continue
-            together = [m for m in ms if abs(m.seen - s.seen) <= SAME_MOMENT]
+            together = [m for m in ms if m.camera != s.camera and abs(m.seen - s.seen) <= SAME_MOMENT]
             if together:  # another camera sees them right now
-                score = min(_dist(m.at(s.seen), (s.x, s.y)) for m in together)
-                if score > MERGE_METRES:
+                d = min(_dist(m.at(s.seen), (s.x, s.y)) for m in together)
+                if d > MERGE_METRES:
                     continue
+                score = d - 3000
             else:  # lost a moment ago
                 gap = s.seen - p.seen
                 if gap > HANDOFF_SECONDS:
                     continue
-                if s.identity is not None and s.identity == p.identity:
-                    score = -1.0  # their face says so, wherever they reappear
+                d = _dist(p.last, (s.x, s.y))
+                walkable = d <= WALK_SPEED * max(gap, 0.0) + MERGE_METRES
+                same_face = s.identity is not None and s.identity == p.identity
+                if same_face:
+                    score = d - 2000 if walkable else -1000.0  # their face says so, wherever they reappear
+                elif walkable:
+                    score = d
                 else:
-                    score = _dist(p.last, (s.x, s.y))
-                    if score > WALK_SPEED * max(gap, 0.0) + MERGE_METRES:
-                        continue
+                    continue
             if score < best_score:
                 best, best_score = pid, score
         return best

@@ -237,6 +237,19 @@ def test_a_recognised_face_wins():
     assert q["id"] == p["id"] and q["label"] == "Sam"
 
 
+def test_a_face_seen_in_two_places_does_not_make_people_jump():
+    # Two people both recognised as visitor 3 (say, twins, or one of them is a photo)
+    m = PropertyMap(FakeSettings())
+    for i in range(3):
+        m.observe("a", [seen(5, 5, 1, "unknown", visitor=3)], 1000, 1000, 100 + 0.4 * i)
+        m.observe("b", [seen(30 + 0.2 * i, 20, 2, "unknown", visitor=3)], 1000, 1000, 100.2 + 0.4 * i)
+    ids = {q["cameras"][0]: q["id"] for q in people(m, 101.0)}
+    # camera a misses its one for a second while camera b's tracker starts a new track for the other
+    m.observe("b", [seen(30.6, 20, 2, "unknown", visitor=3)], 1000, 1000, 101.4)
+    m.observe("b", [seen(30.8, 20, 7, "unknown", visitor=3)], 1000, 1000, 101.8)
+    assert {q["id"]: q["cameras"] for q in people(m, 101.8)} == {ids["Drive"]: ["Drive"], ids["Porch"]: ["Porch"]}
+
+
 def test_a_face_recognised_later_picks_up_the_lost_id():
     m = PropertyMap(FakeSettings())
     m.observe("a", [seen(5, 5, 1, "known", "Sam")], 1000, 1000, 100.0)
