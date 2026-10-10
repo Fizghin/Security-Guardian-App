@@ -1,4 +1,5 @@
 import math
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from models.domain import Detection
 from services import bag_watch
 from services.bag_watch import BagWatch
 from services.detection_service import BAG_CLASSES, DetectionService, detection_service
-from services.fall_watch import FallWatch, lying
+from services.fall_watch import FallWatch, body_angle, lying
+from services.pose_service import PoseService, _turn_back, _turn_points
 from services.sentinel_service import ASK_TEXT, Sentinel, before_after, duration
 from services.settings_service import CameraConfig, SettingsError, SettingsService
 from services.spot_watch import SpotWatch
@@ -331,6 +333,80 @@ def test_pose_checks_run_at_most_once_a_second():
     watch, poses = FallWatch(), Poses(pose(85))
     watch_fall(watch, poses, 0, 5, step=0.1)
     assert len(poses.asked) == 5 and watch.checks == 5
+
+
+@pytest.mark.parametrize("turn", [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE])
+def test_points_on_a_turned_crop_map_back(turn):
+    crop = np.zeros((40, 100, 3), np.uint8)
+    crop[10, 70] = 255
+    turned = crop if turn is None else cv2.rotate(crop, turn)
+    [(y, x)] = np.argwhere(turned[:, :, 0] == 255)
+    point = np.array([[70.5, 10.5]], np.float32)  # the pixel's centre
+    assert np.allclose(_turn_points(point, turn, 100, 40), [[x + 0.5, y + 0.5]])
+    assert np.allclose(_turn_back(_turn_points(point, turn, 100, 40), turn, 100, 40), point)
+
+
+class _Tensor:
+    """Just enough of a tensor for PoseService."""
+
+    def __init__(self, a):
+        self.a = np.asarray(a, np.float32)
+
+    def __getitem__(self, i):
+        return _Tensor(self.a[i])
+
+    def __iter__(self):
+        return (_Tensor(row) for row in self.a)
+
+    def __len__(self):
+        return len(self.a)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.a
+
+    def tolist(self):
+        return self.a.tolist()
+
+
+class TurnedPoses:
+    """A pose model that sees a standing body in every crop, with a torso clarity per turn."""
+
+    def __init__(self, upright: float, turned: float):
+        self.clarity = (upright, turned, turned)
+        self.crops = []
+
+    def __call__(self, crops, **kwargs):
+        self.crops += crops
+        results = []
+        for i, crop in enumerate(crops):
+            h, w = crop.shape[:2]
+            points = np.zeros((17, 3), np.float32)
+            c = self.clarity[i % 3]
+            points[0] = [w / 2, 0.15 * h, c]
+            points[5], points[6] = [w / 2 - 8, 0.3 * h, c], [w / 2 + 8, 0.3 * h, c]
+            points[11], points[12] = [w / 2 - 6, 0.65 * h, c], [w / 2 + 6, 0.65 * h, c]
+            results.append(type("Result", (), {"boxes": type("Boxes", (), {"xyxy": _Tensor([[0, 0, w, h]]),
+                                                                            "__len__": lambda self: 1})(),
+                                               "keypoints": type("Keypoints", (), {"data": _Tensor([points])})()}))
+        return results
+
+
+def test_someone_lying_is_read_from_the_crop_turned_upright():
+    service = PoseService(Path("/nowhere"), lock=threading.Lock())
+    box = [300, 350, 900, 680]  # wide: someone lying across the picture
+    service._model = TurnedPoses(upright=0.4, turned=0.9)
+    [points] = service.estimate(np.zeros((H, W, 3), np.uint8), [box])
+    assert len(service._model.crops) == 3, "upright and a quarter turn both ways"
+    assert lying(points) is True and body_angle(points) < 5
+    assert (points[:, 0] >= 300 - 90).all() and (points[:, 0] <= 900 + 90).all(), "in picture coordinates"
+
+    # A turned reading that is only a little clearer doesn't overrule the upright one
+    service._model = TurnedPoses(upright=0.8, turned=0.9)
+    [points] = service.estimate(np.zeros((H, W, 3), np.uint8), [box])
+    assert lying(points) is False
 
 
 # ---- watch spots -------------------------------------------------------------------------------------

@@ -201,9 +201,10 @@ class Sentinel:
                 self.spots = SpotWatch(config)
             if self._accept:
                 self._accept = False
+                camera = self.camera_name()
                 for name in self.spots.accept():
-                    self.events.log("SPOT", f"{name}: how it looks now counts as normal (marked from the dashboard)",
-                                    camera=self.camera_name())
+                    self.submit(lambda name=name: self.events.log(
+                        "SPOT", f"{name}: how it looks now counts as normal (marked from the dashboard)", camera=camera))
             people = self._people if now - self._people_at <= PEOPLE_HOLD_SECONDS else []
             for happening in self.spots.update(frame, people, now):
                 self._spot(happening, frame, now)
@@ -219,25 +220,26 @@ class Sentinel:
     def draw(self, frame, now: float) -> None:
         """Watch spots, bags standing still and people who may have fallen, on the live picture."""
         h, w = frame.shape[:2]
+        # The same sizes as the zones and people boxes drawn by camera_service.draw_overlay
         scale = max(0.5, w / 1100)
-        thick = max(1, round(scale))
+        thick = max(1, round(scale * 1.5))
         for spot in self.spots.spots:
             colour = AMBER if spot.changed else SPOT
             points = _polygon(spot.polygon, w, h)
             cv2.polylines(frame, [points], True, colour, thick, cv2.LINE_AA)
             text = f"{spot.name}: changed" if spot.changed else spot.name
-            (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, thick)
+            (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, thick)
             x = max(0, min(int(points[:, 0].min()) + 3, w - tw))
-            y = max(th + 2, int(points[:, 1].min()) - 4)
-            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, colour, thick, cv2.LINE_AA)
+            y = max(th + 2, int(points[:, 1].min()) - 5)
+            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, (0, 0, 0), thick + 3, cv2.LINE_AA)
+            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, colour, thick, cv2.LINE_AA)
         for box, still in self.bags.shown(now):
             x1, y1, x2, y2 = (int(v) for v in box)
             cv2.rectangle(frame, (x1, y1), (x2, y2), AMBER, thick + 1)
-            _label(frame, f"Bag {int(still) // 60}:{int(still) % 60:02d}", x1, y1 - 1, AMBER, scale, thick)
+            _label(frame, f"Bag {int(still) // 60}:{int(still) % 60:02d}", x1, y1 - 1, AMBER, 1.1 * scale, thick)
         for person in self.falls.fallen:
             x1, _, _, y2 = (int(v) for v in person.bbox)
-            _label(frame, "May have fallen", x1, y2, RED, scale, thick)
+            _label(frame, "May have fallen", x1, y2, RED, 1.1 * scale, thick)
 
     # ---- events ---------------------------------------------------------------------------
     def _alert_due(self, key: str, now: float, every: float) -> bool:
