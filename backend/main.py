@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse  # noqa: E402
 
 from api import phone_router, router, ws_router  # noqa: E402
+from map_api import map_router  # noqa: E402
 from models.database import init_db  # noqa: E402
 from services.ai_service import ai_service  # noqa: E402
 from services.camera_service import camera_manager  # noqa: E402
@@ -233,6 +234,7 @@ app.add_middleware(PhonePortGuard, port=PHONE_PORT)
 app.include_router(router)
 app.include_router(ws_router)
 app.include_router(phone_router)
+app.include_router(map_router)
 
 if (FRONTEND_DIST / "index.html").exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="dashboard")

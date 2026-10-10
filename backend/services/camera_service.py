@@ -32,6 +32,7 @@ from services.event_service import event_service
 from services.face_service import face_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
+from services.property_map import property_map
 from services.recording_service import Recorder, recording_library
 from services.schedule_service import AppliedEvent, last_event, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
@@ -306,6 +307,7 @@ class CameraUnit:
         if remember:
             self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
+        property_map.observe(self.id, detections, frame.shape[1], frame.shape[0], now)
         self._judging = [frame, detections, None]
         try:
             self.brain.process(detections, now)
