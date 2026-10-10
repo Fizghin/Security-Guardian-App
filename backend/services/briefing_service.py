@@ -16,6 +16,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -31,6 +32,7 @@ BRIEFING_FILE = DATA_DIR / "briefing.json"
 PERIOD_HOURS = 24
 LIST_LIMIT = 20  # entries kept per list in the facts; the counts cover everything
 MODEL_TIMEOUT = 180  # a background job, so a slow CPU gets plenty of time
+STARTUP_DELAY = 60  # the daily run waits this long after starting, so the start is in the log and cameras are up
 LEVEL_NAMES = {1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
 WATCHED = ("DETECTION", "ESCALATION", "CLEARED", "ALERT", "INSIDER", "CAMERA_OFFLINE", "CAMERA_ONLINE",
            "CLIP_SAVED", "ARMED", "DISARMED", "PANIC", "SYSTEM")
@@ -195,7 +197,7 @@ def facts_text(facts: dict, now: datetime) -> str:
               for i in facts["incidents"][:8]]
     if c["incidents"] > 8:
         lines.append(f"- and {c['incidents'] - 8} more.")
-    lines.append(f"Unrecognised people detected: {c['unknown_people']}.")
+    lines.append(f"Unrecognised people (strangers) detected: {c['unknown_people']}.")
     lines.append(f"Alerts sent to the owner: {c['alerts']}.")
     if facts["panics"]:
         lines.append(f"Panic button pressed at: {', '.join(clock(p) for p in facts['panics'][:4])}.")
@@ -213,7 +215,7 @@ def facts_text(facts: dict, now: datetime) -> str:
         lines.append(f"Cameras that went offline: {c['offline']} ({'; '.join(gone)}).")
     else:
         lines.append("Cameras that went offline: none.")
-    lines.append(f"Video clips saved: {c['recordings']}.")
+    lines.append(f"Video clips (recordings) saved: {c['recordings']}.")
     return "\n".join(lines)
 
 
@@ -328,7 +330,8 @@ _QUIET = re.compile(r"\b(quiet|uneventful|nothing (happened|to report)|no incide
 # Things the facts can never show; mentioning one would be made up.
 _INVENTED = re.compile(r"\b(police|intruders?|burglar\w*|break-?ins?|broke in|broken into|stol(e|en)|theft|thie(f|ves)|damage\w*|"
                        r"injur\w*|fire|smoke|weapons?|guns?|suspicious|deliver\w*|couriers?|postman|parcels?|packages?|"
-                       r"cars?|vehicles?|animals?|cats?|dogs?|fox(es)?)\b", re.IGNORECASE)
+                       r"cars?|vehicles?|animals?|cats?|dogs?|fox(es)?|safe|secure|continuous(ly)?|uninterrupted|"
+                       r"heightened)\b", re.IGNORECASE)
 _NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
                  "eleven": 11, "twelve": 12, "twice": 2, "dozen": 12, "hundred": 100}
 # Capitalised words that are not names, e.g. at the start of a sentence
@@ -346,11 +349,44 @@ def clean_briefing(text: str) -> str:
     return _LEAD_IN.sub("", text).strip().strip('"“”').strip()
 
 
-def _allowed_numbers(facts: str) -> set[int]:
-    numbers = {int(n) for n in re.findall(r"\d+", facts)}
-    for hour in re.findall(r"\b(\d{1,2}):\d\d\b", facts):  # "14:05" may be written "2:05 pm"
-        numbers.add(int(hour) % 12 or 12)
-    return numbers
+_CLOCK = re.compile(r"\b(\d{1,2}):(\d\d)(?:\s*([ap])\.?m\b\.?)?", re.IGNORECASE)
+# Words that say nothing about what a number counts
+_FILLER = set("""a an the of at and or in on to by was were is are it its with for from there this that has have
+had been be all each over""".split())
+
+
+def _stem(word: str) -> str:
+    word = word.lower()
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def _number_problem(text: str, facts: str) -> str | None:
+    """A time that isn't in the facts, or a number that isn't or is used for something else: a number
+    must share a word nearby with a line of the facts that has it ("4 clips", not "checked 4 times")."""
+    times = set(re.findall(r"\b\d\d:\d\d\b", facts))
+    for m in _CLOCK.finditer(text):
+        hour, minute, half = int(m.group(1)), m.group(2), (m.group(3) or "").lower()
+        hours = [hour % 12 + (12 if half == "p" else 0)] if half else [hour, hour + 12]  # "14:05" may be "2:05"
+        if not any(f"{h:02d}:{minute}" in times for h in hours):
+            return f"mentions the time {m.group(0).strip()}, which is not in the facts"
+    lines = []
+    for line in facts.splitlines():
+        words = re.findall(r"[A-Za-z]+|\d+", _CLOCK.sub(" ", line))
+        lines.append(({int(w) for w in words if w.isdigit()}, {_stem(w) for w in words if not w.isdigit()}))
+    tokens = re.findall(r"[A-Za-z]+|\d+", _CLOCK.sub(" ", text))
+    for i, token in enumerate(tokens):
+        value = int(token) if token.isdigit() else _NUMBER_WORDS.get(token.lower())
+        if value is None:
+            continue
+        known = [words for numbers, words in lines if value in numbers]
+        if not known:
+            return (f"mentions the number {token}, which is not in the facts" if token.isdigit()
+                    else f"mentions '{token}', a number that is not in the facts")
+        near = {_stem(w) for w in tokens[max(0, i - 3):i] + tokens[i + 1:i + 4]
+                if not w.isdigit() and w.lower() not in _FILLER and w.lower() not in _NUMBER_WORDS}
+        if near and not any(near & words for words in known):
+            return f"uses the number {token} for something the facts don't say"
+    return None
 
 
 def check_briefing(text: str, facts: str, eventful: bool = True) -> str | None:
@@ -368,14 +404,8 @@ def check_briefing(text: str, facts: str, eventful: bool = True) -> str | None:
     sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if re.search(r"[A-Za-z]", s)]
     if not 2 <= len(sentences) <= 6:
         return f"has {len(sentences)} sentences instead of 3 to 5"
-    allowed = _allowed_numbers(facts)
-    for n in re.findall(r"\d+", text):
-        if int(n) not in allowed:
-            return f"mentions the number {n}, which is not in the facts"
-    for word in re.findall(r"[A-Za-z]+", text):
-        value = _NUMBER_WORDS.get(word.lower())
-        if value is not None and value not in allowed:
-            return f"mentions '{word}', a number that is not in the facts"
+    if problem := _number_problem(text, facts):
+        return problem
     known = {w.lower() for w in re.findall(r"[A-Za-z]+", facts + " " + SYSTEM_PROMPT)}
     for word in re.findall(r"\b[A-Z][A-Za-z]*", text):
         lower = word.lower()
@@ -392,9 +422,10 @@ def check_briefing(text: str, facts: str, eventful: bool = True) -> str | None:
 # ---- the service --------------------------------------------------------------------------
 class BriefingService:
     def __init__(self, settings=settings_service, ai=ai_service, notifier=notification_service, events=event_service,
-                 path=BRIEFING_FILE):
+                 path=BRIEFING_FILE, startup_delay: float = STARTUP_DELAY):
         self.settings, self.ai, self.notifier, self.events = settings, ai, notifier, events
         self.path = path
+        self._ready_at = time.monotonic() + startup_delay
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
         self.generating = False
@@ -508,6 +539,8 @@ class BriefingService:
         now = (now or datetime.now()).astimezone()
         today = now.date().isoformat()
         if not cfg.enabled or self.daily_done == today or now.strftime("%H:%M") < cfg.time:
+            return False
+        if time.monotonic() < self._ready_at:
             return False
         if not self.refresh(send=cfg.send):
             return False  # one is being written by hand; the daily one follows at the next check

@@ -80,8 +80,8 @@ def test_facts_text_and_template(busy_day):
     facts = collect_facts(busy_day, armed_now=False)
     text = facts_text(facts, busy_day.astimezone())
     for expected in ("Incidents with unrecognised people: 3", "Porch at", "highest level 3 of 4 (Intruder)",
-                     "Unrecognised people detected: 3", "Alerts sent to the owner: 1", "Insiders recognised: 1 (Sam, from",
-                     "Garden at", "back after 2 minutes", "Video clips saved: 1", "armed by the schedule",
+                     "Unrecognised people (strangers) detected: 3", "Alerts sent to the owner: 1", "Insiders recognised: 1 (Sam, from",
+                     "Garden at", "back after 2 minutes", "Video clips (recordings) saved: 1", "armed by the schedule",
                      "disarmed by hand", "Test intrusions run by the owner: 1", "Guardian is disarmed now",
                      "Guardian was stopped at"):
         assert expected in text, expected
@@ -119,6 +119,11 @@ GOOD = ("There were 3 incidents with unrecognised people, and the one at Porch r
     (GOOD.replace("3 incidents", "999 incidents"), "the number 999"),
     (GOOD.replace("3 incidents", "a hundred incidents"), "'hundred'"),
     (GOOD + " The police were called.", "'police'"),
+    (GOOD + " Guardian kept your home safe.", "'safe'"),
+    # Numbers and times must be used as the facts use them
+    (GOOD.replace("1 clip was saved", "the camera was checked 3 times"), "uses the number 3 for something"),
+    (GOOD.replace("reached level 3", "reached level three"), None),
+    (GOOD + " Sam arrived at 23:59.", "the time 23:59"),
     (GOOD.replace("There were 3 incidents", "It was a quiet day, with 3 incidents"), "quiet"),
     ("I'm sorry, but I can't help with writing a security briefing about these people. Is there anything else?",
      "refusal"),
@@ -164,9 +169,10 @@ class FakeEvents:
         self.logged.append((event_type, description))
 
 
-def service(tmp_path, ai=None, notifier=None, settings=None) -> BriefingService:
+def service(tmp_path, ai=None, notifier=None, settings=None, startup_delay=0) -> BriefingService:
     return BriefingService(settings=settings or SettingsService(tmp_path / "settings.json"), ai=ai or FakeAI(),
-                           notifier=notifier or FakeNotifier(), events=FakeEvents(), path=tmp_path / "briefing.json")
+                           notifier=notifier or FakeNotifier(), events=FakeEvents(), path=tmp_path / "briefing.json",
+                           startup_delay=startup_delay)
 
 
 def test_model_briefing_is_used_when_it_checks_out(tmp_path, busy_day):
@@ -256,6 +262,14 @@ def test_daily_briefing_settings(tmp_path):
     assert svc.run_if_due(local(13, "09:00")) is True
     wait(svc)
     assert svc.events.logged == [("BRIEFING", "Daily briefing written, but not sent: no alert channel is set up")]
+
+
+def test_the_daily_run_waits_a_little_after_starting(tmp_path):
+    svc = service(tmp_path, startup_delay=60)  # just started: the start isn't in the log yet
+    assert svc.run_if_due(local(12, "09:00")) is False and svc.daily_done is None
+    svc._ready_at = 0
+    assert svc.run_if_due(local(12, "09:00")) is True
+    wait(svc)
 
 
 def test_a_daily_run_waits_for_one_being_written(tmp_path):
