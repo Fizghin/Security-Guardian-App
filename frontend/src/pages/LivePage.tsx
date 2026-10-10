@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
 import { api, type CameraStatus, type SecurityEvent, type Status } from '../api'
+import BriefingCard from '../components/BriefingCard'
 import EventRow, { EventPicture } from '../components/EventRow'
 import LiveAudio from '../components/LiveAudio'
 import LiveVideo from '../components/LiveVideo'
@@ -310,6 +311,7 @@ export default function LivePage() {
 
       <div className="space-y-4">
         {status && selected && <CameraCard camera={selected} status={status} />}
+        <BriefingCard />
         <Card
           title="Recent activity"
           actions={

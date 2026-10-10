@@ -408,6 +408,7 @@ export interface Settings {
   phone: { fps: number; max_width: number; quality: number }
   schedule: { enabled: boolean; rules: ScheduleRule[] }
   learning: { learn_from_feedback: boolean; improve_faces: boolean; unusual_activity: 'off' | 'log' | 'alert' }
+  briefing: { enabled: boolean; time: string; send: boolean }
   notifications: {
     discord_webhook_set: boolean
     telegram_token_set: boolean
@@ -447,6 +448,52 @@ export interface RoutineReport {
 }
 
 export type NotificationChannel = 'discord' | 'telegram' | 'ntfy' | 'webhook' | 'email'
+
+/** What the event log says about the briefing's period. Lists are cut short; the counts cover everything. */
+export interface BriefingFacts {
+  counts: {
+    incidents: number
+    unknown_people: number
+    alerts: number
+    insiders: number
+    offline: number
+    recordings: number
+    arming_changes: number
+    panics: number
+    tests: number
+  }
+  incidents: { camera: string | null; time: string; peak_level: number }[]
+  alerts: { camera: string | null; time: string }[]
+  insiders: { name: string; first: string; last: string; cameras: string[] }[]
+  offline: { camera: string | null; time: string; back_after_seconds: number | null }[]
+  arming: { time: string; armed: boolean; by: 'schedule' | 'hand' }[]
+  panics: string[]
+  armed_at_start: boolean
+  armed_now: boolean
+}
+
+export interface Briefing {
+  text: string | null
+  /** llm: written by the language model and checked against the facts; template: written from the facts */
+  source: 'llm' | 'template' | null
+  /** Why the template was used, when the model was asked */
+  note: string | null
+  generated_at: string | null
+  period: { start: string; end: string; hours: number } | null
+  facts: BriefingFacts | null
+  generating: boolean
+  enabled: boolean
+}
+
+export interface HeatmapSummary {
+  hours: number
+  /** Points added: each tracked person adds at most two a second */
+  total: number
+  empty: boolean
+  /** By the Guardian computer's hour of the day */
+  by_hour: number[]
+  busiest_hours: { hour: number; points: number; share: number }[]
+}
 
 export interface NotificationResult {
   channel: NotificationChannel
@@ -571,6 +618,8 @@ export const api = {
   cameraFaces: (id: string) => request<{ faces: LiveFace[] }>(`${cam(id)}/faces`),
   routine: (id: string) => request<RoutineReport>(`${cam(id)}/routine`),
   resetRoutine: (id: string) => request<{ ok: boolean }>(`${cam(id)}/routine`, { method: 'DELETE' }),
+  heatmapUrl: (id: string, hours: number, version: number) => `${cam(id)}/heatmap.jpg?hours=${hours}&v=${version}`,
+  heatmapSummary: (id: string, hours: number) => request<HeatmapSummary>(`${cam(id)}/heatmap/summary?hours=${hours}`),
   snapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg`,
   rawSnapshotUrl: (id: string) => `${cam(id)}/snapshot.jpg?raw=1&t=${Date.now()}`,
   streamUrl: (id: string) => socketUrl(`/ws/stream/${encodeURIComponent(id)}`),
@@ -580,6 +629,8 @@ export const api = {
   events: (filters: EventFilters, limit = 50, offset = 0) =>
     request<EventPage>(`/api/events${query({ ...filters, limit, offset })}`),
   eventSummary: (hours: number) => request<EventSummary>(`/api/events/summary?hours=${hours}`),
+  briefing: () => request<Briefing>('/api/briefing'),
+  refreshBriefing: () => request<Briefing>('/api/briefing/refresh', json('POST')),
   eventsCsvUrl: (filters: EventFilters) => `/api/events/export.csv${query({ ...filters })}`,
   clearEvents: () => request<{ deleted: number }>('/api/events', { method: 'DELETE' }),
   /** null clears the verdict and undoes what it taught */

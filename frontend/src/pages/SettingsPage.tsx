@@ -853,6 +853,41 @@ function NotificationsSection({ value, save }: { value: Notifications; save: Sav
   )
 }
 
+// ---- Briefing ------------------------------------------------------------------------------------
+function BriefingSection({ value, save, channels, status }: { value: Settings['briefing']; save: Save; channels: number; status: Status | null }) {
+  const d = useDraft(value)
+  const zone = status ? ` (UTC${status.time_zone.utc_offset})` : ''
+  return (
+    <Section
+      id="briefing"
+      title="Daily briefing"
+      description="A few sentences on the last 24 hours on the Live page: incidents and how far they escalated, alerts, who was recognised, cameras that went offline and arming changes. The language model writes it from the event log and is checked against it; when it isn’t available, the briefing is written from a template."
+      dirty={d.dirty}
+      canSave={!!d.draft.time}
+      onReset={d.reset}
+      onSave={() => save({ briefing: d.changes })}
+    >
+      <Toggle checked={d.draft.enabled} onChange={(v) => d.set('enabled', v)} label="Write a daily briefing" description="Refresh on the Live page writes a new one at any time." />
+      <Field label="Write it every day at" hint={`In the Guardian computer’s time zone${zone}. If Guardian is off then, it is written when it starts.`}>
+        <input type="time" aria-label="Briefing time" className="input w-36" value={d.draft.time} disabled={!d.draft.enabled} onChange={(e) => d.set('time', e.target.value)} />
+      </Field>
+      <Toggle
+        checked={d.draft.send}
+        onChange={(v) => d.set('send', v)}
+        disabled={!d.draft.enabled}
+        label="Also send it to me"
+        description={
+          channels > 0 ? (
+            'At that time, through the alert channels set up under Notifications.'
+          ) : (
+            <span className="text-amber-400">No alert channel is set up yet; set one up under Notifications.</span>
+          )
+        }
+      />
+    </Section>
+  )
+}
+
 // ---- System ------------------------------------------------------------------------------------
 function Stat({ label, value, warn }: { label: string; value: ReactNode; warn?: boolean }) {
   return (
@@ -903,6 +938,7 @@ const SECTIONS = [
   ['escalation', 'Escalation'],
   ['recording', 'Recording'],
   ['notifications', 'Notifications'],
+  ['briefing', 'Briefing'],
   ['system', 'System'],
 ] as const
 
@@ -961,6 +997,7 @@ export default function SettingsPage({ section }: { section: string }) {
         <EscalationSection key={k(settings.escalation)} value={settings.escalation} save={save} sirenAvailable={status?.siren.available} />
         <RecordingSection key={k(settings.recording)} value={settings.recording} save={save} encoder={sys.data?.recording_encoder} />
         <NotificationsSection key={k(settings.notifications)} value={settings.notifications} save={save} />
+        <BriefingSection key={k(settings.briefing)} value={settings.briefing} save={save} channels={settings.notifications.configured.length} status={status} />
         <SystemSection />
       </div>
     </div>

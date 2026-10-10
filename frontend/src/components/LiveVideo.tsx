@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Battery, BatteryCharging, Camera, Download, Maximize2, Mic, Smartphone, VideoOff } from 'lucide-react'
+import { Battery, BatteryCharging, Camera, Download, Flame, Maximize2, Mic, Smartphone, VideoOff } from 'lucide-react'
 import { api, type CameraStatus } from '../api'
 import { cx } from '../lib/cx'
 import { LEVELS } from '../lib/format'
 import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
+import HeatmapOverlay from './HeatmapOverlay'
 
 const STALE_MS = 3000
 const CAPTION_SECONDS = 12
@@ -27,6 +28,7 @@ export default function LiveVideo({
   const [socketOpen, setSocketOpen] = useState(false)
   const [hasFrame, setHasFrame] = useState(false)
   const [stale, setStale] = useState(false)
+  const [heatmap, setHeatmap] = useState(false)
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -75,7 +77,7 @@ export default function LiveVideo({
   const showFrame = hasFrame && !stale && camera.connected
   const level = camera.threat_level
   const caption =
-    !compact && camera.last_message && camera.last_message_time && status && status.server_time - camera.last_message_time < CAPTION_SECONDS
+    !compact && !heatmap && camera.last_message && camera.last_message_time && status && status.server_time - camera.last_message_time < CAPTION_SECONDS
       ? camera.last_message
       : null
   const phone = camera.kind === 'phone' ? camera.phone : undefined
@@ -107,6 +109,7 @@ export default function LiveVideo({
         alt={`${camera.name} live`}
         className={cx('h-full w-full object-contain', !hasFrame && 'invisible', hasFrame && !showFrame && 'opacity-30')}
       />
+      {heatmap && !compact && <HeatmapOverlay camera={camera} />}
 
       <div className={cx('absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent', compact ? 'px-2 py-1.5 text-[11px]' : 'px-3 py-2 text-xs')}>
         <div className="flex min-w-0 items-center gap-2 font-medium">
@@ -144,6 +147,19 @@ export default function LiveVideo({
           )}
           {!compact && (
             <>
+              <button
+                type="button"
+                aria-pressed={heatmap}
+                title="Heatmap: where people spent time"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setHeatmap((v) => !v)
+                }}
+                className={cx('flex items-center gap-1 rounded px-1.5 py-1 font-medium', heatmap ? 'bg-white/20 text-white' : 'text-zinc-200 hover:bg-white/10')}
+              >
+                <Flame className="h-4 w-4" />
+                Heatmap
+              </button>
               <a href={api.snapshotUrl(camera.id)} download={`${camera.id}-snapshot.jpg`} className="rounded p-1.5 text-zinc-200 hover:bg-white/10" title="Save snapshot">
                 <Download className="h-4 w-4" />
               </a>
@@ -155,7 +171,7 @@ export default function LiveVideo({
         </div>
       </div>
 
-      {problem && (
+      {problem && !heatmap && (
         <div className={cx('absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center', compact ? 'p-3' : 'p-6')}>
           {!camera.connected ? <VideoOff className={cx('text-zinc-500', compact ? 'h-5 w-5' : 'h-8 w-8')} /> : <Camera className={cx('text-zinc-500', compact ? 'h-5 w-5' : 'h-8 w-8')} />}
           <p className={cx('font-medium text-zinc-200', compact && 'text-xs')}>{problem.title}</p>

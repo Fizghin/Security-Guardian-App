@@ -28,10 +28,12 @@ from models.domain import Detection
 from services.ai_service import WarningContext, ai_service
 from services.audio_service import CameraSpeaker
 from services.brain_service import CameraBrain
+from services.briefing_service import briefing_service
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import face_service
 from services.learning_service import event_details, learning_service
+from services.heatmap_service import heatmap_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
@@ -131,6 +133,7 @@ class CameraUnit:
         self.sound.snapshot = self.snapshot
         self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
         self.sound.incident_active = lambda: self.brain.incident_active
+        self.heatmap = heatmap_service
 
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
@@ -176,6 +179,7 @@ class CameraUnit:
 
     # ---- lifecycle -----------------------------------------------------------------
     def start(self) -> None:
+        self.heatmap.load(self.id)
         self.source.start()
         self._running.set()
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"camera:{self.id}")
@@ -186,6 +190,7 @@ class CameraUnit:
         self._running.clear()
         if self._thread:
             self._thread.join(timeout=5)
+        self.heatmap.save(self.id)
         self.brain.reset("Camera stopped")
         self.recorder.shutdown()
         self.source.stop()
@@ -335,6 +340,7 @@ class CameraUnit:
         if learn_faces:
             self.learning.offer_faces(self.id, self.name(), detections, evidence, self.tracker.tracks,
                                       det.face_match_threshold, now)
+        self.heatmap.add(self.id, detections, frame.shape[1], frame.shape[0], now)
         if remember:
             self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
@@ -629,10 +635,12 @@ class CameraManager:
                 self.prune_old_media()
                 routine_service.flush(time.time())
                 visitor_service.expire(time.time())  # people who left while no camera checked for visitors
+                heatmap_service.tick()
                 if self.settings.get().armed:
                     self.ai.keep_warm()
                 busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))
                 if not busy:
+                    briefing_service.run_if_due()  # waits for a quiet moment, as it uses the model too
                     self.ai.prefetch(self.warning_contexts())
             except Exception as exc:  # keep the schedule and voice preparation running
                 print(f"[manager] Background task failed: {exc}")

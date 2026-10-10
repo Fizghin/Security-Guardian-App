@@ -325,7 +325,7 @@ class AIService:
         return model
 
     def _chat(self, cfg: AISettings, model: str, messages: list[dict], temperature: float = 0.7,
-              timeout: httpx.Timeout | None = None) -> str:
+              timeout: httpx.Timeout | None = None, max_tokens: int = 80) -> str:
         timeout = timeout or httpx.Timeout(cfg.timeout_seconds, connect=5)
         if cfg.provider == "ollama":
             r = httpx.post(f"{self._base(cfg)}/api/chat", timeout=timeout, json={
@@ -333,14 +333,14 @@ class AIService:
                 "messages": messages,
                 "stream": False,
                 "keep_alive": KEEP_ALIVE,
-                "options": {"num_predict": 80, "temperature": temperature, "num_thread": LLM_THREADS},
+                "options": {"num_predict": max_tokens, "temperature": temperature, "num_thread": LLM_THREADS},
             })
             r.raise_for_status()
             return r.json()["message"]["content"]
         r = httpx.post(f"{self._base(cfg)}/chat/completions", headers=self._headers(cfg), timeout=timeout, json={
             "model": model,
             "messages": messages,
-            "max_tokens": 80,
+            "max_tokens": max_tokens,
             "temperature": temperature,
         })
         r.raise_for_status()

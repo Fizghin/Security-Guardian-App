@@ -19,9 +19,11 @@ from services.ai_service import AIError, WarningContext, ai_service
 from services.camera_access import local_camera_blocked
 from services.camera_service import camera_manager
 from services.detection_service import detection_service
+from services.briefing_service import briefing_service
 from services.event_service import event_service
 from services.face_service import FaceError, face_service
 from services.learning_service import LearningError, learning_service
+from services.heatmap_service import KEEP_DAYS as HEATMAP_DAYS, heatmap_service
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
@@ -182,6 +184,7 @@ def delete_camera(camera_id: str):
         raise HTTPException(404, "Camera not found")
     settings_service.remove_camera(camera_id)
     learning_service.forget_camera(camera_id, faces=False)  # its ignored spots and suggestions
+    heatmap_service.forget(camera_id)  # a new camera that gets this id starts with an empty map
     event_service.log("SYSTEM", "Camera removed", camera=cam.name)
     return {"ok": True}
 
@@ -304,6 +307,20 @@ def reset_camera_routine(camera_id: str):
     routine_service.reset(cam.id)
     event_service.log("SYSTEM", "Learned routine reset: learning starts again", camera=cam.name)
     return {"ok": True}
+
+
+@router.get("/cameras/{camera_id}/heatmap.jpg")
+def camera_heatmap(camera_id: str, hours: int = Query(24, ge=1, le=24 * HEATMAP_DAYS)):
+    """Where people spent time over the last `hours`, over the camera's latest picture."""
+    unit = _unit(camera_id)
+    jpeg = heatmap_service.render(camera_id, hours, unit.latest_raw(), unit.cfg.zones)
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/cameras/{camera_id}/heatmap/summary")
+def camera_heatmap_summary(camera_id: str, hours: int = Query(24, ge=1, le=24 * HEATMAP_DAYS)):
+    _unit(camera_id)
+    return heatmap_service.summary(camera_id, hours)
 
 
 async def _until_closed(websocket: WebSocket) -> None:
@@ -562,6 +579,18 @@ def list_events(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=
 @router.get("/events/summary")
 def events_summary(hours: int = Query(24, ge=1, le=24 * 365)):
     return event_service.summary(hours)
+
+
+@router.get("/briefing")
+def get_briefing():
+    return briefing_service.current()
+
+
+@router.post("/briefing/refresh")
+def refresh_briefing():
+    """Writes a new briefing in the background; poll GET /api/briefing until `generating` is false."""
+    briefing_service.refresh()
+    return briefing_service.current()
 
 
 @router.get("/events/export.csv")
