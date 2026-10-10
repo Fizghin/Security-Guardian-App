@@ -334,6 +334,19 @@ def test_a_still_thing_is_suggested_after_ten_minutes_once_per_place(env):
         env.learning.answer(again["id"], accept=True)
 
 
+def test_a_removed_spot_is_not_suggested_again_straight_away(env):
+    env.settings.update({"armed": False})
+    teach_spot(env)
+    env.learning.delete_spot(env.learning.overview()["spots"][0]["id"])
+    cam = camera(env)
+    start = time.time()
+    assert not look(cam, start)[0].ignored
+    stay(cam, start, SUGGEST_AFTER + 10)
+    assert env.learning.overview()["suggestions"] == []
+    stay(camera(env), start + DISMISS_FOR + 60, SUGGEST_AFTER + 10)
+    assert len(env.learning.overview()["suggestions"]) == 1, "only for a day"
+
+
 def test_moving_things_and_faces_are_not_suggested(env):
     env.settings.update({"armed": False})
     start = time.time()

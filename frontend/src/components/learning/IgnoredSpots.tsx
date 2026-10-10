@@ -101,7 +101,7 @@ function CameraSpots({
               onClick={() =>
                 act(s.id, async () => {
                   await api.deleteSpot(s.id)
-                  return `Removed. Everything in that spot on ${name} is watched again.`
+                  return `Removed. Everything in that spot on ${name} is watched again, and it won't be suggested for a day.`
                 })
               }
             >

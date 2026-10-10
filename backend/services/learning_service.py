@@ -538,12 +538,15 @@ class LearningService:
         return {"days": days, "cameras": sorted(cameras.values(), key=lambda c: (c["camera"] or "").lower())}
 
     def delete_spot(self, spot_id: str) -> None:
+        """Removes a spot. Like a dismissal, its place is not suggested again for DISMISS_FOR, so a thing
+        still standing there is not suggested again the moment the owner removed it."""
         self._ensure_loaded()
         with self._lock:
-            kept = [s for s in self._spots if s["id"] != spot_id]
-            if len(kept) == len(self._spots):
+            spot = next((s for s in self._spots if s["id"] == spot_id), None)
+            if spot is None:
                 raise KeyError(spot_id)
-            self._spots = kept
+            self._spots.remove(spot)
+            self._dismissed.append({"camera_id": spot["camera_id"], "box": spot["box"], "until": time.time() + DISMISS_FOR})
         self._save()
 
     def answer(self, suggestion_id: str, accept: bool) -> dict:
