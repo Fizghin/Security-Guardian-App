@@ -29,6 +29,8 @@ LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 
 SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
 # Events that keep a picture of the moment for the event log
 PICTURE_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT", "VISITOR"}
+# ...and who was in the picture, for learning from the owner's feedback (see learning_service)
+DETAIL_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT"}
 ALERT_REPEAT_SECONDS = 120
 INSIDER_LOG_SECONDS = 300
 PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
@@ -48,6 +50,7 @@ class CameraBrain:
         self.settings, self.ai, self.notifier, self.events = settings, ai, notifier, events
         self.prune, self.clock = prune, clock
         self.snapshot: Callable[[], bytes | None] = lambda: None
+        self.details: Callable[[], dict | None] = lambda: None  # the people in that picture
         self._lock = threading.RLock()
 
         self.threat_level = 0
@@ -87,13 +90,18 @@ class CameraBrain:
     def incident_active(self) -> bool:
         return self.incident_start is not None
 
-    def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None) -> None:
-        picture = None
+    def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
+             insider: str | None = None) -> None:
+        picture = details = None
         if event_type in PICTURE_EVENTS:
             picture = self.snapshot()
             recording = recording or self.recorder.file  # the clip that shows this moment
+        if event_type in DETAIL_EVENTS:
+            details = self.details()
+            if details is not None and insider:
+                details["insider"] = insider  # who "Not <name>" feedback would be about
         event_id = self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
-                                   snapshot=picture)
+                                   snapshot=picture, details=details)
         if picture and event_id is not None and self.incident_start is not None:
             self.picture_event = event_id
 
@@ -113,7 +121,7 @@ class CameraBrain:
                 self._insider_seen[name] = now
                 if name not in self._insider_logged or now - self._insider_logged[name] >= INSIDER_LOG_SECONDS:
                     self._insider_logged[name] = now
-                    self._log("INSIDER", f"Recognised {name}")
+                    self._log("INSIDER", f"Recognised {name}", insider=name)
                 self._maybe_greet(name, now)
 
             real_unknown = [d for d in unknown if not d.simulated]

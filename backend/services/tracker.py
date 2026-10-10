@@ -43,6 +43,13 @@ class Track:
     identity: str | None = None
     best_score: float = 0.0
     face_seen_at: float = 0.0
+    # For telling still things from people (learning_service): where the track began, the furthest its
+    # box centre has been from there (x, y in pixels), the largest change in its width or height (a ratio),
+    # and whether a face was ever seen on it.
+    first_bbox: list[float] = field(default_factory=list)
+    moved: tuple[float, float] = (0.0, 0.0)
+    resized: float = 1.0
+    faced: bool = False
 
 
 def iou(a: list[float], b: list[float]) -> float:
@@ -60,6 +67,17 @@ def _near(a: list[float], b: list[float]) -> bool:
     dx = (a[0] + a[2] - b[0] - b[2]) / 2
     dy = (a[1] + a[3] - b[1] - b[3]) / 2
     return (dx * dx + dy * dy) ** 0.5 < 0.6 * max(aw, bw)
+
+
+def _note_movement(track: Track, box: list[float]) -> None:
+    """How far a track has moved and changed size since it began; identity is not affected."""
+    first = track.first_bbox
+    dx = abs(box[0] + box[2] - first[0] - first[2]) / 2
+    dy = abs(box[1] + box[3] - first[1] - first[3]) / 2
+    track.moved = (max(track.moved[0], dx), max(track.moved[1], dy))
+    for i in (0, 1):  # width, then height
+        ratio = max(1.0, box[i + 2] - box[i]) / max(1.0, first[i + 2] - first[i])
+        track.resized = max(track.resized, ratio, 1 / ratio)
 
 
 class Tracker:
@@ -100,13 +118,15 @@ class Tracker:
         assigned = self._assign(detections)
         for det, ev, track in zip(detections, evidence, assigned):
             if track is None:
-                track = Track(self._next_id, det.bbox, now, now)
+                track = Track(self._next_id, det.bbox, now, now, first_bbox=list(det.bbox))
                 self.tracks[track.id] = track
                 self._next_id += 1
             track.bbox, track.last_seen = det.bbox, now
+            _note_movement(track, det.bbox)
 
             if ev.face_visible:
                 track.face_seen_at = now
+                track.faced = True
             if ev.name:
                 weight = 2.0 if ev.score >= threshold + STRONG_MARGIN else 1.0
                 if not ev.quality_ok:

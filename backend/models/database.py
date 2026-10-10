@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, LargeBinary, String, create_engine, inspect, text
@@ -35,6 +36,8 @@ class SecurityEvent(Base):
     recording = Column(String, nullable=True)  # file name in storage/recordings
     camera = Column(String, nullable=True, index=True)  # camera name at the time of the event
     snapshot = Column(String, nullable=True)  # picture of the moment, file name in storage/snapshots
+    details = Column(String, nullable=True)  # JSON: the people in the picture (see learning_service.event_details)
+    feedback = Column(String, nullable=True)  # the owner's verdict: real, false_alarm or wrong_person
 
     def to_dict(self) -> dict:
         return {
@@ -48,6 +51,8 @@ class SecurityEvent(Base):
             # The picture's file name, so its URL changes with the file: ids start again at 1 after
             # the log is cleared, and a browser must not show a deleted picture it cached.
             "snapshot": self.snapshot or None,
+            "details": json.loads(self.details) if self.details else None,
+            "feedback": self.feedback,
         }
 
 
@@ -107,6 +112,10 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN camera VARCHAR"))
         if "snapshot" not in existing:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN snapshot VARCHAR"))
+        if "details" not in existing:
+            conn.execute(text("ALTER TABLE security_events ADD COLUMN details VARCHAR"))
+        if "feedback" not in existing:
+            conn.execute(text("ALTER TABLE security_events ADD COLUMN feedback VARCHAR"))
 
 
 def get_db():

@@ -125,6 +125,14 @@ class AISettings(BaseModel):
     greet_cooldown_minutes: int = Field(60, ge=1, le=1440)
 
 
+class LearningSettings(BaseModel):
+    # "False alarm" on an event teaches Guardian to ignore that spot while nothing moves there. When off,
+    # feedback is still recorded but teaches nothing.
+    learn_from_feedback: bool = True
+    # Adds new looks at an insider's face, from sightings where they were clearly recognised.
+    improve_faces: bool = True
+
+
 class PhoneSettings(BaseModel):
     fps: int = Field(8, ge=1, le=15)
     max_width: int = Field(960, ge=320, le=1920)
@@ -228,6 +236,7 @@ class Settings(BaseModel):
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
     notifications: NotificationSettings = NotificationSettings()
+    learning: LearningSettings = LearningSettings()
 
     @field_validator("cameras")
     @classmethod

@@ -25,6 +25,7 @@ FACES_DIR = DATA_DIR / "faces"
 MODELS_DIR = DATA_DIR / "models"
 SNAPSHOTS_DIR = DATA_DIR / "snapshots"  # pictures attached to events
 VISITORS_DIR = DATA_DIR / "visitors"  # face crops of remembered strangers, one folder per visitor
+LEARNING_DIR = DATA_DIR / "learning"  # what Guardian learned from feedback (spots.json) and photos set aside
 SETTINGS_FILE = DATA_DIR / "settings.json"
 SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"  # the schedule event last acted on
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(DATA_DIR / 'guardian.db').as_posix()}"

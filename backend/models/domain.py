@@ -21,3 +21,5 @@ class Detection(BaseModel):
     visitor_id: Optional[int] = None
     visitor_label: Optional[str] = None  # the name given to them in the dashboard, if any
     seen_before: Optional[str] = None    # e.g. "Visitor 12, seen before: 3 visits, last Tue 23:10"
+    # A still thing on a spot the owner taught Guardian to ignore (see learning_service); the brain never sees it
+    ignored: bool = False

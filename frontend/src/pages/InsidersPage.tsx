@@ -179,7 +179,7 @@ function InsiderCard({ insider, onChanged }: { insider: Insider; onChanged: () =
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [results, setResults] = useState<UploadResult[] | null>(null)
-  const [confirm, setConfirm] = useState<{ photo?: string } | null>(null)
+  const [confirm, setConfirm] = useState<{ photo?: string; learned?: boolean } | null>(null)
 
   const addPhotos = async (files: FileList | null) => {
     if (!files?.length) return
@@ -216,6 +216,7 @@ function InsiderCard({ insider, onChanged }: { insider: Insider; onChanged: () =
   }
 
   const usable = insider.photos.filter((p) => p.usable).length
+  const learned = insider.photos.filter((p) => p.learned).length
 
   return (
     <Card
@@ -234,6 +235,14 @@ function InsiderCard({ insider, onChanged }: { insider: Insider; onChanged: () =
     >
       <p className="mb-3 text-xs text-zinc-500">
         {usable} of {insider.photos.length} {insider.photos.length === 1 ? 'photo' : 'photos'} usable for recognition
+        {learned > 0 && (
+          <>
+            {' · '}
+            <a href={href('learning')} className="hover:text-zinc-300">
+              {learned} learned by Guardian
+            </a>
+          </>
+        )}
       </p>
       <div className="flex flex-wrap gap-2">
         {insider.photos.map((p) => (
@@ -242,11 +251,19 @@ function InsiderCard({ insider, onChanged }: { insider: Insider; onChanged: () =
             {!p.usable && (
               <span className="absolute inset-x-0 bottom-0 bg-black/80 py-0.5 text-center text-[10px] text-amber-300">No face found</span>
             )}
+            {p.learned && (
+              <span className="absolute left-1 top-1 rounded bg-black/75 px-1 py-px text-[10px] font-medium text-blue-300" title="Guardian added this photo itself, from a clear sighting">
+                Learned
+              </span>
+            )}
             <button
               type="button"
-              onClick={() => setConfirm({ photo: p.file })}
-              className="absolute right-1 top-1 rounded bg-black/70 p-0.5 text-zinc-200 opacity-0 transition-opacity hover:text-white group-hover:opacity-100 focus:opacity-100"
-              aria-label="Remove photo"
+              onClick={() => setConfirm({ photo: p.file, learned: p.learned })}
+              className={cx(
+                'absolute right-1 top-1 rounded bg-black/70 p-0.5 text-zinc-200 transition-opacity hover:text-white focus:opacity-100',
+                p.learned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+              )}
+              aria-label={p.learned ? 'Remove learned photo' : 'Remove photo'}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -259,7 +276,7 @@ function InsiderCard({ insider, onChanged }: { insider: Insider; onChanged: () =
         title={confirm?.photo ? 'Remove this photo?' : `Remove ${insider.name}?`}
         message={
           confirm?.photo
-            ? 'The photo is deleted and no longer used for recognition.'
+            ? `${confirm.learned ? 'Guardian learned this photo itself. ' : ''}The photo is deleted and no longer used for recognition.`
             : `${insider.name} will no longer be recognised and will trigger alarms like anyone else. All their photos are deleted.`
         }
         confirmLabel="Remove"

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { BellOff, Film, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
+import { BellOff, Film, GraduationCap, Menu, Settings as SettingsIcon, ScrollText, Shield, ShieldAlert, ShieldOff, UserSearch, Users, Video, X } from 'lucide-react'
 import { api } from '../api'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatDuration, LEVELS } from '../lib/format'
@@ -15,6 +15,7 @@ const NAV: { page: Page; label: string; icon: typeof Video }[] = [
   { page: 'recordings', label: 'Recordings', icon: Film },
   { page: 'insiders', label: 'Insiders', icon: Users },
   { page: 'visitors', label: 'Visitors', icon: UserSearch },
+  { page: 'learning', label: 'Learning', icon: GraduationCap },
   { page: 'settings', label: 'Settings', icon: SettingsIcon },
 ]
 
