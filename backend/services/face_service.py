@@ -371,10 +371,10 @@ class FaceService:
 
     # ---- photos Guardian learned by itself (see learning_service) --------------------
     def similarity(self, name: str, feat: np.ndarray) -> float | None:
-        """How alike a face is to the insider's closest photo, or None when they have no usable photo."""
-        with self._lock:
-            feats = self._gallery.get(name)
-            return max(float(np.dot(feat, f)) for _, f in feats) if feats else None
+        """How alike a face is to the insider's closest photo, or None when they have no usable photo. Reads
+        the gallery as it is without waiting for the lock, so a camera thread never waits for another's faces."""
+        feats = list(self._gallery.get(name) or [])
+        return max(float(np.dot(feat, f)) for _, f in feats) if feats else None
 
     @staticmethod
     def _learned_in(person_dir: Path) -> list[tuple[Path, dict]]:

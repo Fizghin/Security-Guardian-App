@@ -66,7 +66,6 @@ LEARN_MARGIN = 0.08     # a face learned from must match this far above the thre
 LEARN_AGREE = 3         # ...on a track with at least this many looks agreeing...
 LEARN_NOVEL = 0.85      # ...and be less alike than this to all of the insider's photos
 LEARN_EVERY = 600.0     # at most one learned photo per insider this often
-TRY_EVERY = 5.0         # a tracked person's face is offered at most this often
 MAX_LEARNED = 12        # learned photos kept per insider
 SAME_SIGHTING = 300.0   # "Not Alice" takes back Alice's photos learned this close to the event...
 SAME_TRACK = 3600.0     # ...and those learned from the same tracked person within this time
@@ -132,7 +131,6 @@ class LearningService:
         self._saved_at = 0.0
         self._loaded = False
         self._looks: dict[tuple[str, int], int] = {}  # (camera id, track id) -> looks agreeing with its identity
-        self._tried: dict[tuple[str, int], float] = {}
         self._blocked: set[tuple[str, int]] = set()  # tracked people the owner said were someone else
         self._learned_at: dict[str, float] = {}  # insider -> when a photo of them was last learned
         self._learning: set[str] = set()  # insiders with a photo waiting to be saved
@@ -296,8 +294,7 @@ class LearningService:
         self._ensure_loaded()
         with self._lock:
             for key in [k for k in self._looks if k[0] == camera_id and k[1] not in tracks]:
-                self._looks.pop(key, None)
-                self._tried.pop(key, None)
+                del self._looks[key]
             for d, ev in zip(detections, evidence):
                 track = tracks.get(d.track_id) if d.track_id is not None else None
                 name = d.identity
@@ -310,10 +307,11 @@ class LearningService:
                         or not ev.quality_ok or ev.feature is None or ev.crop is None
                         or ev.score < threshold + LEARN_MARGIN):
                     continue
-                if (name in self._learning or now - self._learned_at.get(name, 0.0) < LEARN_EVERY
-                        or now - self._tried.get(key, 0.0) < TRY_EVERY):
+                if name in self._learning or now - self._learned_at.get(name, 0.0) < LEARN_EVERY:
                     continue
-                self._tried[key] = now
+                closest = self.faces.similarity(name, ev.feature)
+                if closest is None or closest >= LEARN_NOVEL:
+                    continue  # nothing new about this look
                 self._learning.add(name)
                 job = (name, ev.feature.copy(), ev.crop.copy(), round(ev.score, 2), camera_id, camera_name, track.id, now)
                 if not self._enqueue(lambda job=job: self._learn_face(*job)):
@@ -326,7 +324,7 @@ class LearningService:
                 return
             closest = self.faces.similarity(name, feat)
             if closest is None or closest >= LEARN_NOVEL:
-                return  # nothing new about this look
+                return  # another camera learned a look like this meanwhile
             meta = {"learned": at, "camera_id": camera_id, "camera": camera_name, "track": track_id, "score": score}
             if self.faces.add_learned(name, crop, feat, meta, MAX_LEARNED) is None:
                 return

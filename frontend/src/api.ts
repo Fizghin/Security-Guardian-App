@@ -56,6 +56,8 @@ export interface CameraStatus {
   persons: number
   pending: number
   insiders_in_view: string[]
+  /** Still things on a spot the owner taught Guardian to ignore; not counted in persons */
+  ignored: number
   siren_active: boolean
   last_message: string | null
   last_message_time: number | null

@@ -54,7 +54,7 @@ BOX_HOLD_SECONDS = 1.5
 PRUNE_SECONDS = 3600  # old recordings and event pictures are deleted at least this often
 
 RED, GREEN, AMBER, GREY, BLUE = (40, 40, 220), (90, 180, 60), (0, 170, 240), (150, 150, 150), (230, 160, 60)
-DIM = (110, 110, 110)  # people ignored on a learned spot
+DIM = (170, 170, 170)  # still things ignored on a learned spot
 ZONE = (230, 230, 160)  # detection zone outlines, light cyan
 
 
@@ -69,9 +69,12 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.bbox)
         if d.ignored:  # thin and dim, so the owner can see a learned spot at work
-            cv2.rectangle(frame, (x1, y1), (x2, y2), DIM, 1)
-            cv2.putText(frame, "ignored", (x1 + 4, max(int(14 * scale), y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45 * scale, DIM, 1, cv2.LINE_AA)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), DIM, max(1, thick // 2))
+            (tw, th), base = cv2.getTextSize("ignored", cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, 1)
+            pad = int(3 * scale)
+            cv2.rectangle(frame, (x1 + 1, y1 + 1), (x1 + tw + 2 * pad, y1 + th + base + 2 * pad), (0, 0, 0), -1)
+            cv2.putText(frame, "ignored", (x1 + pad, y1 + th + pad), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, DIM, 1,
+                        cv2.LINE_AA)
             continue
         if d.simulated:
             color, label = AMBER, "TEST"
@@ -390,6 +393,7 @@ class CameraUnit:
             "pipeline": {"fps": self.fps if src["connected"] else 0.0, "motion": self.motion,
                          "test_seconds_left": max(0, int(self.simulate_until - time.time())), "error": self.error},
             **self.brain.status(),
+            "ignored": sum(1 for d in self._detections if d.ignored),  # still things on a learned spot
             "recording": self.recorder.status(),
             "zones_mismatch": self.zones_mismatch(),
         }
