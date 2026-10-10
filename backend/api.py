@@ -18,6 +18,7 @@ from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import FaceError, face_service
 from services.notification_service import ChannelError, notification_service
+from services.forensics_service import forensics_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
 from services.schedule_service import time_zone
@@ -443,6 +444,24 @@ def delete_recording(name: str):
     except PermissionError as exc:
         raise HTTPException(409, str(exc))
     return {"ok": True}
+
+
+@router.get("/recordings/{name}/forensic-digest")
+def get_forensic_digest(name: str):
+    try:
+        recording_library.path(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+    return forensics_service.generate_forensic_digest(name)
+
+
+@router.get("/recordings/{name}/verify-integrity")
+def verify_recording_integrity(name: str):
+    try:
+        recording_library.path(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+    return forensics_service.verify_clip_integrity(name)
 
 
 # ---- insiders ----------------------------------------------------------------------
