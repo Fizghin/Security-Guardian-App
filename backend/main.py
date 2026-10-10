@@ -28,6 +28,7 @@ from services.recording_service import recording_library  # noqa: E402
 from services.settings_service import Settings, settings_service  # noqa: E402
 from services.siren_service import siren_service  # noqa: E402
 from services.tts_service import tts_service  # noqa: E402
+from services.visitor_service import visitor_service  # noqa: E402
 
 def is_phone_path(path: str) -> bool:
     """The phone camera page and its API. Exact matches only: a prefix check would let
@@ -45,6 +46,8 @@ def apply_settings(old: Settings | None, new: Settings) -> None:
     if old is not None and old.recording.retention_days != new.recording.retention_days:
         recording_library.prune(new.recording.retention_days)
         event_service.prune_snapshots(new.recording.retention_days)
+    if old is not None and old.detection.visitor_retention_days != new.detection.visitor_retention_days:
+        visitor_service.prune()
 
 
 class _EmbeddedServer(uvicorn.Server):
@@ -75,9 +78,11 @@ async def _run_phone_listener(server: uvicorn.Server) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    visitor_service.start()
     cfg = settings_service.get()
     removed = recording_library.prune(cfg.recording.retention_days)
     event_service.prune_snapshots(cfg.recording.retention_days)
+    visitor_service.prune()
     if removed:
         event_service.log("SYSTEM", f"Deleted {removed} recording(s) older than {cfg.recording.retention_days} days")
     camera_manager.start()

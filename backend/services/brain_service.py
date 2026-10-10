@@ -9,6 +9,7 @@ Threat escalation for one camera.
 
 People the tracker is still identifying ("pending") do not start an incident,
 so a resident walking up to the camera is recognised before anything is said.
+Strangers who are remembered visitors are noted in the log and in the alert.
 An incident ends when nobody unrecognised has been seen for clear_after
 seconds, when the system is disarmed, or when the alarm is reset. A panic is
 driven by the CameraManager and stays at level 4 until it is reset.
@@ -27,7 +28,7 @@ from services.settings_service import settings_service
 LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
 SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
 # Events that keep a picture of the moment for the event log
-PICTURE_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT"}
+PICTURE_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT", "VISITOR"}
 ALERT_REPEAT_SECONDS = 120
 INSIDER_LOG_SECONDS = 300
 PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
@@ -62,6 +63,8 @@ class CameraBrain:
         self.last_ai_time = 0.0
         self.last_alert_time = 0.0
         self.said: List[str] = []
+        self.picture_event: int | None = None  # the incident's latest event with a picture
+        self._seen_before: dict[int, str] = {}  # visitor id -> "seen before" note, this incident
 
         self.persons = 0
         self.pending = 0
@@ -89,8 +92,10 @@ class CameraBrain:
         if event_type in PICTURE_EVENTS:
             picture = self.snapshot()
             recording = recording or self.recorder.file  # the clip that shows this moment
-        self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
-                        snapshot=picture)
+        event_id = self.events.log(event_type, description, severity, recording=recording, camera=self.camera_name(),
+                                   snapshot=picture)
+        if picture and event_id is not None and self.incident_start is not None:
+            self.picture_event = event_id
 
     # ---- inputs ---------------------------------------------------------
     def process(self, detections: List[Detection], now: float | None = None) -> None:
@@ -123,11 +128,25 @@ class CameraBrain:
                 if self.incident_start is None:
                     self._begin_incident(now, simulated=all(d.simulated for d in unknown))
                     who = "Unrecognised person" if len(unknown) == 1 else f"{len(unknown)} unrecognised people"
-                    self._log_level("DETECTION", f"{who} detected" + (" (test)" if self.simulated else ""), "LOW")
+                    seen = self._returning(unknown)
+                    self._log_level("DETECTION", f"{who} detected" + (" (test)" if self.simulated else "")
+                                    + (f" ({'; '.join(seen)})" if seen else ""), "LOW")
+                elif seen := self._returning(unknown):
+                    # Recognised after the incident started, e.g. once they faced the camera
+                    self._log("VISITOR", f"Returning visitor: {'; '.join(seen)}", "LOW")
                 self.last_seen = now
             elif pending and self.incident_start is not None:
                 self.last_seen = now  # someone is still there while we work out who they are
             self._update(now)
+
+    def _returning(self, unknown: List[Detection]) -> List[str]:
+        """Notes for remembered visitors not yet mentioned in this incident."""
+        notes = []
+        for d in unknown:
+            if d.visitor_id is not None and d.seen_before and d.visitor_id not in self._seen_before:
+                self._seen_before[d.visitor_id] = d.seen_before
+                notes.append(d.seen_before)
+        return notes
 
     def tick(self, now: float | None = None) -> None:
         with self._lock:
@@ -162,6 +181,8 @@ class CameraBrain:
         self.simulated = simulated
         self.said = []
         self.last_alert_time = 0.0
+        self.picture_event = None
+        self._seen_before = {}
 
     def _update(self, now: float) -> None:
         if self.incident_start is None:
@@ -214,6 +235,8 @@ class CameraBrain:
             self.last_alert_time = now
             prefix = "[TEST] " if self.simulated else ""
             msg = f"Unrecognised person at {camera} for {seconds}s. Threat level {level} ({LEVEL_NAMES[level]})."
+            if self._seen_before:
+                msg += f" {'; '.join(self._seen_before.values())}."
             if self.notifier.send_alert(f"{prefix}Intruder at {camera}", msg, SEVERITY[level], self.snapshot()):
                 self._alerted = True
                 self._log("ALERT", f"Owner alerted: {msg}", SEVERITY[level])
@@ -279,6 +302,8 @@ class CameraBrain:
         self.manual = False
         self.simulated = False
         self.said = []
+        self.picture_event = None
+        self._seen_before = {}
         if self._siren_fired:
             self.speaker.siren(False)
         self._siren_fired = False

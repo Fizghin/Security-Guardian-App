@@ -30,8 +30,8 @@ class EventService:
         self.snapshot_dir = snapshot_dir
 
     def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
-            camera: str | None = None, snapshot: bytes | None = None) -> None:
-        """snapshot: a JPEG of the moment, shown with the event in the dashboard."""
+            camera: str | None = None, snapshot: bytes | None = None) -> int | None:
+        """snapshot: a JPEG of the moment, shown with the event in the dashboard. Returns the event's id."""
         severity = severity.upper() if severity.upper() in SEVERITIES else "INFO"
         print(f"[event] {severity:<8} {event_type}{f' [{camera}]' if camera else ''}: {description}")
         now = utcnow()
@@ -39,7 +39,7 @@ class EventService:
             picture = self._save_snapshot(now, event_type, snapshot) if snapshot else None
             db = SessionLocal()
             try:
-                db.add(SecurityEvent(
+                row = SecurityEvent(
                     timestamp=now,
                     event_type=event_type,
                     description=description,
@@ -47,13 +47,18 @@ class EventService:
                     recording=recording,
                     camera=camera,
                     snapshot=picture,
-                ))
+                )
+                db.add(row)
+                db.flush()
+                event_id = row.id
                 db.commit()
+                return event_id
             except Exception as exc:
                 db.rollback()
                 print(f"[event] Failed to store event: {exc}")
                 if picture:
                     (self.snapshot_dir / picture).unlink(missing_ok=True)  # no event refers to it
+                return None
             finally:
                 db.close()
 
@@ -66,6 +71,17 @@ class EventService:
         except OSError as exc:
             print(f"[event] Could not save snapshot: {exc}")
             return None
+
+    def pictures(self, event_ids: list[int]) -> dict[int, dict]:
+        """The events with these ids that still exist, for showing their pictures elsewhere."""
+        if not event_ids:
+            return {}
+        db = SessionLocal()
+        try:
+            rows = db.query(SecurityEvent).filter(SecurityEvent.id.in_(set(event_ids))).all()
+            return {r.id: r.to_dict() for r in rows}
+        finally:
+            db.close()
 
     def snapshot_path(self, event_id: int) -> Path | None:
         db = SessionLocal()

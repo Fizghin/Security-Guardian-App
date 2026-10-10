@@ -86,10 +86,12 @@ class FakeNotifier:
     def __init__(self, works=True):
         self.works = works
         self.alerts = []
+        self.messages = []
         self.clips = []
 
     def send_alert(self, title, message, severity="HIGH", snapshot=None):
         self.alerts.append(title)
+        self.messages.append(message)
         return self.works
 
     def send_clip(self, title, message, path):
@@ -100,13 +102,16 @@ class FakeNotifier:
 class FakeEvents:
     def __init__(self):
         self.entries = []
+        self.descriptions = []
         self.pictures = []
         self.clips = []
 
     def log(self, event_type, description, severity="INFO", recording=None, camera=None, snapshot=None):
         self.entries.append((event_type, severity, camera))
+        self.descriptions.append((event_type, description))
         self.pictures.append((event_type, snapshot))
         self.clips.append((event_type, recording))
+        return len(self.entries)  # the event's id
 
     def types(self):
         return [t for t, _, _ in self.entries]
@@ -331,3 +336,34 @@ def test_pictures_link_to_the_clip_recording_them(brain):
     assert clips[:4] == [("DETECTION", None), ("ESCALATION", "clip.mp4"), ("RECORDING", "clip.mp4"),
                          ("ESCALATION", "clip.mp4")]
     assert ("ALERT", "clip.mp4") in clips and ("INSIDER", "clip.mp4") in clips
+
+
+SEEN = "Visitor 4, seen before: 3 visits, last Tue 23:10"
+
+
+def visitor(note=SEEN, visitor_id=4):
+    d = person(face=True)
+    d.visitor_id, d.seen_before = visitor_id, note
+    return d
+
+
+def test_detection_says_when_a_stranger_was_seen_before(brain):
+    brain.snapshot = lambda: b"jpeg"
+    brain.process([visitor()])
+    assert brain.events.descriptions[0] == ("DETECTION", f"Unrecognised person detected ({SEEN})")
+    assert brain.picture_event == 1, "the event that shows them, for the visitor's history"
+    advance(brain, 10, [visitor()])  # level 3 alerts the owner
+    assert brain.notifier.messages == [
+        f"Unrecognised person at Front door for 10s. Threat level 3 (Intruder). {SEEN}."]
+    assert "VISITOR" not in brain.events.types(), "mentioned once"
+
+
+def test_visitor_recognised_during_an_incident_is_logged_once(brain):
+    brain.process([person(face=True), person()])
+    advance(brain, 1, [person(face=True), visitor()])
+    advance(brain, 1, [person(face=True), visitor()])
+    assert [d for t, d in brain.events.descriptions if t == "VISITOR"] == [f"Returning visitor: {SEEN}"]
+    advance(brain, 11, [])  # they leave; next time it is a new incident
+    brain.process([visitor()])
+    detections = [d for t, d in brain.events.descriptions if t == "DETECTION"]
+    assert detections == ["2 unrecognised people detected", f"Unrecognised person detected ({SEEN})"]

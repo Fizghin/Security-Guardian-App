@@ -9,6 +9,7 @@ import InsidersPage from './pages/InsidersPage'
 import LivePage from './pages/LivePage'
 import RecordingsPage from './pages/RecordingsPage'
 import SettingsPage from './pages/SettingsPage'
+import VisitorsPage from './pages/VisitorsPage'
 
 // The chart library is large; load it only when the Events page is opened.
 const EventsPage = lazy(() => import('./pages/EventsPage'))
@@ -35,6 +36,7 @@ export default function App() {
           )}
           {page === 'recordings' && <RecordingsPage />}
           {page === 'insiders' && <InsidersPage />}
+          {page === 'visitors' && <VisitorsPage />}
           {page === 'settings' && <SettingsPage section={section} />}
         </Shell>
       </StatusContext.Provider>

@@ -164,3 +164,20 @@ def test_a_small_face_seen_in_two_crops_goes_to_one_person(scene):
     stranger, insider = scene.analyze(frame, people([500, 300, 660, 700], [580, 280, 700, 700]), 0.36)
     assert insider.face_visible and insider.name == "Carlo"
     assert not stranger.face_visible
+
+
+def test_faces_are_kept_for_remembering_visitors(scene):
+    frame = frame_with((INSIDER, INSIDER_FACE), (STRANGER, STRANGER_FACE))
+    stranger, insider = scene.analyze(frame, people(STRANGER_BOX, INSIDER_BOX), 0.36, keep_faces=True)
+    assert np.allclose(stranger.feature, FEATURES[STRANGER]) and 0 < stranger.quality <= 1
+    assert stranger.crop.shape[0] > STRANGER_FACE[3] - STRANGER_FACE[1], "the face with a margin around it"
+    assert scene.analyze(frame, people(STRANGER_BOX, INSIDER_BOX), 0.36)[0].feature is None, "only when asked"
+    scene._gallery = {}  # with no insiders, faces are still looked for when asked
+    assert scene.analyze(frame, people(STRANGER_BOX), 0.36, keep_faces=True)[0].feature is not None
+    assert scene.analyze(frame, people(STRANGER_BOX), 0.36)[0].face_visible is False
+
+
+def test_better_looks_score_higher():
+    sharp, blurry, turned, small = (FaceService._look(face(120), 300), FaceService._look(face(120), 40),
+                                    FaceService._look(face(120, nose_x=0.7), 300), FaceService._look(face(40), 300))
+    assert sharp == pytest.approx(0.95) and sharp > max(blurry, turned, small)

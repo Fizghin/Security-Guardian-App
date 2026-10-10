@@ -77,6 +77,11 @@ class DetectionSettings(BaseModel):
     # Loud sounds heard by phone cameras: logged with a picture, or also recorded and alerted while armed.
     sound_alerts: Literal["off", "log", "alert"] = "log"
     sound_sensitivity: int = Field(5, ge=1, le=10)
+    # Repeat visitors: remember strangers' faces while armed and recognise them when they return.
+    remember_visitors: bool = True
+    visitor_retention_days: int = Field(90, ge=0, le=3650, description="0 = keep forever")
+    # A sighting this long after the visitor was last seen counts as a new visit.
+    visit_gap_minutes: int = Field(30, ge=0, le=1440)
 
 
 class EscalationSettings(BaseModel):

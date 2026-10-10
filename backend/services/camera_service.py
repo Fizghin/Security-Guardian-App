@@ -4,7 +4,7 @@ Cameras.
 Each enabled camera runs as a CameraUnit with its own background loop:
 
   frame -> motion check -> person detection -> face evidence -> tracker
-        -> CameraBrain (escalation) -> annotated frame (live view + recorder)
+        -> remembered visitors -> CameraBrain (escalation) -> annotated frame (live view + recorder)
 
 A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts).
 
@@ -40,6 +40,7 @@ from services.sound_service import SoundMonitor
 from services.sources import CaptureSource, parse_source
 from services.talk_service import audio_hub
 from services.tracker import FaceEvidence, Tracker
+from services.visitor_service import visitor_service
 from services.zones import keep_in_zones, shape_changed
 
 # Avoid oversubscribing the CPU: OpenCV, PyTorch and the language model all default to one
@@ -72,7 +73,7 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
         elif d.status == "pending":
             color, label = BLUE, "Checking"
         else:
-            color, label = (RED if armed else GREY), "Unknown"
+            color, label = (RED if armed else GREY), d.visitor_label or "Unknown"  # a visitor's given name
         label = f"{label} {d.confidence:.0%}"
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick + 1)
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * scale, thick)
@@ -93,9 +94,10 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
 
 class CameraUnit:
     def __init__(self, cfg: CameraConfig, settings=settings_service, detector=detection_service, faces=face_service,
-                 notifier=notification_service, events=event_service, hub=phone_hub, audio=audio_hub):
+                 notifier=notification_service, events=event_service, hub=phone_hub, audio=audio_hub,
+                 visitors=visitor_service):
         self.id = cfg.id
-        self.settings, self.detector, self.faces = settings, detector, faces
+        self.settings, self.detector, self.faces, self.visitors = settings, detector, faces, visitors
         self.notifier, self.events, self.hub = notifier, events, hub
         self._cfg = cfg
         self.source = self._make_source(cfg)
@@ -288,21 +290,29 @@ class CameraUnit:
         det = cfg.detection
         detections = self.detector.detect_persons(frame, det.confidence, det.min_person_height)
         detections = keep_in_zones(detections, frame.shape[1], frame.shape[0], self.cfg.zones)
-        recognition = det.face_recognition and self.faces.active
-        evidence = self.faces.analyze(frame, detections, det.face_match_threshold) if recognition \
-            else [FaceEvidence() for _ in detections]
+        # Strangers' faces are remembered only while armed, like everything else that is recorded.
+        # Newcomers are then checked against remembered visitors as against insiders.
+        remember = det.face_recognition and det.remember_visitors and cfg.armed and self.faces.ready
+        recognition = det.face_recognition and (self.faces.active or remember)
+        look = recognition and (self.faces.active or self.visitors.wants_look(self.id, detections, now))
+        evidence = self.faces.analyze(frame, detections, det.face_match_threshold, keep_faces=remember) \
+            if look else [FaceEvidence() for _ in detections]
         if simulating:
             h, w = frame.shape[:2]
             detections.append(Detection(class_name="person", confidence=0.99, simulated=True,
                                         bbox=[w * 0.35, h * 0.2, w * 0.65, h * 0.95]))
             evidence.append(FaceEvidence())
         self.tracker.update(detections, evidence, now, det.face_match_threshold, det.identify_seconds, recognition)
+        if remember:
+            self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
         self._judging = [frame, detections, None]
         try:
             self.brain.process(detections, now)
         finally:
             self._judging = None
+        if remember:
+            self.visitors.record(self.id, self.name(), detections, now, self.brain.picture_event)
         self.error = self.detector.error
 
     def _check_health(self, now: float) -> None:
@@ -362,9 +372,9 @@ class CameraUnit:
         }
 
 
-def prune_media(retention_days: int, events=event_service) -> int:
-    """Recordings and event pictures share one retention period."""
-    return recording_library.prune(retention_days) + events.prune_snapshots(retention_days)
+def prune_media(retention_days: int, events=event_service, visitors=visitor_service) -> int:
+    """Recordings and event pictures share one retention period; remembered visitors have their own."""
+    return recording_library.prune(retention_days) + events.prune_snapshots(retention_days) + visitors.prune()
 
 
 class CameraManager:
@@ -575,6 +585,7 @@ class CameraManager:
             try:
                 self.check_schedule()
                 self.prune_old_media()
+                visitor_service.expire(time.time())  # people who left while no camera checked for visitors
                 if self.settings.get().armed:
                     self.ai.keep_warm()
                 busy = self.panic_active or any(u.brain.incident_active for u in list(self.units.values()))

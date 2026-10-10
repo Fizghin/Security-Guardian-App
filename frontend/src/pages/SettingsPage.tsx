@@ -5,6 +5,7 @@ import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
+import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -436,6 +437,34 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
           <Slider label="Sound sensitivity" value={d.draft.sound_sensitivity} min={1} max={10} format={(v) => `${v} of 10`} onChange={(v) => d.set('sound_sensitivity', v)} hint={`Counts sounds ${50 - 4 * d.draft.sound_sensitivity} dB or more above what that place usually sounds like. Higher catches quieter sounds.`} />
         )}
       </div>
+      {d.draft.face_recognition && (
+        <div className="space-y-4 border-t border-zinc-800 pt-4">
+          <Toggle
+            checked={d.draft.remember_visitors}
+            onChange={(v) => d.set('remember_visitors', v)}
+            label="Remember strangers’ faces"
+            description={
+              <>
+                While armed, keeps the faces of people it doesn’t recognise on this computer and says when they come back. See{' '}
+                <a href={href('visitors')} className="text-blue-400 hover:text-blue-300">
+                  Visitors
+                </a>
+                .
+              </>
+            }
+          />
+          {d.draft.remember_visitors && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Forget visitors after" hint="Days since they were last seen. 0 keeps them until you forget them.">
+                <NumberInput value={d.draft.visitor_retention_days} min={0} max={3650} suffix="days" onChange={(v) => d.set('visitor_retention_days', v)} />
+              </Field>
+              <Field label="Count a new visit after" hint="Time away before coming back counts as another visit">
+                <NumberInput value={d.draft.visit_gap_minutes} min={0} max={1440} suffix="min" onChange={(v) => d.set('visit_gap_minutes', v)} />
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
     </Section>
   )
 }
