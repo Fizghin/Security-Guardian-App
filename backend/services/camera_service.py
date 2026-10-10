@@ -6,7 +6,8 @@ Each enabled camera runs as a CameraUnit with its own background loop:
   frame -> motion check -> person detection -> face evidence -> tracker
         -> remembered visitors -> CameraBrain (escalation) -> annotated frame (live view + recorder)
 
-A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts).
+A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts). Its Sentinel
+watches for bags left behind, people who may have fallen and changes to watch spots.
 
 The CameraManager creates and removes units as settings change, and handles
 what applies to the whole system: arming, the panic button, resetting, the
@@ -34,6 +35,7 @@ from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
 from services.schedule_service import AppliedEvent, last_event, next_change
+from services.sentinel_service import Sentinel
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
 from services.sound_service import SoundMonitor
@@ -113,6 +115,8 @@ class CameraUnit:
         self.sound.snapshot = self.snapshot
         self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
         self.sound.incident_active = lambda: self.brain.incident_active
+        self.sentinel = Sentinel(self.name, self.speaker, self.recorder, settings=settings, notifier=notifier,
+                                 events=events)
 
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
@@ -154,6 +158,7 @@ class CameraUnit:
         self.source = self._make_source(cfg)
         self.source.start()
         self.tracker.reset()
+        self.sentinel.reset()
 
     # ---- lifecycle -----------------------------------------------------------------
     def start(self) -> None:
@@ -267,9 +272,11 @@ class CameraUnit:
                         or now - last_detect >= HEARTBEAT_SECONDS):
                     last_detect = now
                     self._detect(frame, now, cfg, simulating)
+                self.sentinel.watch(frame, now, self.cfg.watch_spots)
 
                 shown = self._detections if now - self._detections_time < BOX_HOLD_SECONDS else []
                 annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones)
+                self.sentinel.draw(annotated, now)
                 jpeg = self._encode(annotated)
                 with self._lock:
                     self._annotated, self._raw = annotated, frame
@@ -288,8 +295,10 @@ class CameraUnit:
 
     def _detect(self, frame, now: float, cfg: Settings, simulating: bool) -> None:
         det = cfg.detection
-        detections = self.detector.detect_persons(frame, det.confidence, det.min_person_height)
-        detections = keep_in_zones(detections, frame.shape[1], frame.shape[0], self.cfg.zones)
+        everyone, bags = self.detector.detect(frame, det.confidence, det.min_person_height,
+                                              bags=det.unattended_minutes > 0)
+        detections = keep_in_zones(everyone, frame.shape[1], frame.shape[0], self.cfg.zones)
+        bags = keep_in_zones(bags, frame.shape[1], frame.shape[0], self.cfg.zones)
         # Strangers' faces are remembered only while armed, like everything else that is recorded.
         # Newcomers are then checked against remembered visitors as against insiders.
         remember = det.face_recognition and det.remember_visitors and cfg.armed and self.faces.ready
@@ -313,6 +322,7 @@ class CameraUnit:
             self._judging = None
         if remember:
             self.visitors.record(self.id, self.name(), detections, now, self.brain.picture_event)
+        self.sentinel.detected(frame, everyone, detections, bags, now)
         self.error = self.detector.error
 
     def _check_health(self, now: float) -> None:
@@ -369,6 +379,7 @@ class CameraUnit:
             **self.brain.status(),
             "recording": self.recorder.status(),
             "zones_mismatch": self.zones_mismatch(),
+            "sentinel": self.sentinel.status(cfg.watch_spots),
         }
 
 

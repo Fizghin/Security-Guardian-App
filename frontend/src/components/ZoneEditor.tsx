@@ -20,16 +20,50 @@ const SNAP_PX = 16
 
 const points = (zone: Zone) => zone.map(([x, y]) => `${x},${y}`).join(' ')
 
+/** The first "Spot n" name not in use yet */
+const freeName = (names: string[]) => {
+  let n = names.length + 1
+  while (names.some((name) => name.trim().toLowerCase() === `spot ${n}`)) n++
+  return `Spot ${n}`
+}
+
+/** Why the watch spots' names can't be saved, or null */
+function namesProblem(names: string[]) {
+  const tidy = names.map((name) => name.trim().toLowerCase())
+  if (tidy.some((name) => !name)) return 'Give every watch spot a name.'
+  if (new Set(tidy).size !== tidy.length) return 'Each watch spot needs its own name.'
+  return null
+}
+
 const toPoint = (x: number, y: number, size: DOMRect) => {
   const snap = (offset: number, length: number) => (offset < SNAP_PX ? 0 : offset > length - SNAP_PX ? 1 : offset / length)
   return [Math.round(snap(x, size.width) * 10000) / 10000, Math.round(snap(y, size.height) * 10000) / 10000]
 }
 
-export default function ZoneEditor({ camera, onClose, onSaved }: { camera: CameraConfig; onClose: () => void; onSaved: () => void }) {
+/**
+ * Draws a camera's detection zones, or (mode "spots") its watch spots: named areas such as a gate that
+ * should keep looking the same. Both are outlines with the same rules.
+ */
+export default function ZoneEditor({
+  camera,
+  mode = 'zones',
+  onClose,
+  onSaved,
+}: {
+  camera: CameraConfig
+  mode?: 'zones' | 'spots'
+  onClose: () => void
+  onSaved: () => void
+}) {
   const notify = useToast()
   const { status } = useStatus()
   const area = useRef<HTMLDivElement>(null)
-  const [zones, setZones] = useState<Zone[]>(camera.zones)
+  const spots = mode === 'spots'
+  const noun = spots ? 'spot' : 'zone'
+  const saved = spots ? camera.watch_spots.map((s) => s.polygon) : camera.zones
+  const savedNames = camera.watch_spots.map((s) => s.name)
+  const [zones, setZones] = useState<Zone[]>(saved)
+  const [names, setNames] = useState<string[]>(savedNames)
   const [drawing, setDrawing] = useState<Zone | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   // The corner being moved, and where it sits relative to the pointer
@@ -41,12 +75,12 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
   const [room, setRoom] = useState({ width: 0, height: 0 })
   const [confirmClose, setConfirmClose] = useState(false)
   const [saving, setSaving] = useState(false)
-  const changed = JSON.stringify(zones) !== JSON.stringify(camera.zones)
+  const changed = JSON.stringify(zones) !== JSON.stringify(saved) || (spots && JSON.stringify(names) !== JSON.stringify(savedNames))
 
   const live = status?.cameras.find((c) => c.id === camera.id)
   const liveAspect = live?.width && live.height ? live.width / live.height : null
   const aspect = pictureAspect ?? liveAspect ?? camera.zones_aspect ?? 16 / 9
-  const drawnOnOtherShape = camera.zones.length > 0 && shapeChanged(camera.zones_aspect, pictureAspect ?? liveAspect)
+  const drawnOnOtherShape = !spots && camera.zones.length > 0 && shapeChanged(camera.zones_aspect, pictureAspect ?? liveAspect)
   // The whole picture fits in the room the dialog leaves, whatever its shape
   const height = Math.min(room.height, room.width / aspect)
   const width = height * aspect
@@ -71,12 +105,19 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
   const finish = (zone: Zone) => {
     const problem = zoneProblem(zone)
     if (problem) {
-      setNote(`${problem} Add corners or cancel the zone.`)
+      setNote(`${problem.replace('zone', noun)} Add corners or cancel the ${noun}.`)
       return
     }
     setZones((z) => [...z, zone])
+    if (spots) setNames((n) => [...n, freeName(n)])
     setSelected(zones.length)
     cancelZone()
+  }
+
+  const remove = (keep: (i: number) => boolean) => {
+    setZones((z) => z.filter((_, i) => keep(i)))
+    setNames((n) => n.filter((_, i) => keep(i)))
+    setSelected(null)
   }
 
   const nearestCorner = (x: number, y: number, size: DOMRect, reach: number) => {
@@ -127,7 +168,7 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
       }
     }
     if (zones.length >= MAX_ZONES) {
-      notify(`At most ${MAX_ZONES} zones per camera`, 'error')
+      notify(`At most ${MAX_ZONES} ${spots ? 'watch spots' : 'zones'} per camera`, 'error')
       return
     }
     setSelected(null)
@@ -141,16 +182,26 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
     const zone = zones[dragging.zone].map((p, i) => (i === dragging.corner ? at : p))
     // A corner that would spoil the zone stays where it was
     const problem = zoneProblem(zone)
-    setNote(problem)
+    setNote(problem && problem.replace('zone', noun))
     if (!problem) setZones(zones.map((z, i) => (i === dragging.zone ? zone : z)))
   }
 
   const save = async () => {
+    const problem = spots && namesProblem(names)
+    if (problem) {
+      setNote(problem)
+      return
+    }
     setSaving(true)
     try {
-      // Without a picture the server assumes the zones fit the camera's live picture
-      await api.updateCamera(camera.id, { zones, ...(pictureAspect && { zones_aspect: pictureAspect }) })
-      notify(zones.length ? 'Zones saved' : 'The whole picture is watched again', 'success')
+      if (spots) {
+        await api.updateCamera(camera.id, { watch_spots: zones.map((polygon, i) => ({ name: names[i].trim(), polygon })) })
+        notify(zones.length ? 'Watch spots saved' : 'No watch spots', 'success')
+      } else {
+        // Without a picture the server assumes the zones fit the camera's live picture
+        await api.updateCamera(camera.id, { zones, ...(pictureAspect && { zones_aspect: pictureAspect }) })
+        notify(zones.length ? 'Zones saved' : 'The whole picture is watched again', 'success')
+      }
       onSaved()
       onClose()
     } catch (err) {
@@ -164,10 +215,12 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
   const hint =
     note ??
     (!drawing
-      ? 'Only people standing inside a zone count. Click to outline an area; drag corners to adjust.'
+      ? spots
+        ? 'Outline something that should keep looking the same, such as a gate, door or window. Click to outline it; drag corners to adjust.'
+        : 'Only people standing inside a zone count. Click to outline an area; drag corners to adjust.'
       : full
-        ? `${MAX_CORNERS} corners is the most a zone can have. Click the first corner or Finish zone to close it.`
-        : `Click to add corners (${drawing.length} so far). Click the first corner or Finish zone to close it.`)
+        ? `${MAX_CORNERS} corners is the most a ${noun} can have. Click the first corner or Finish ${noun} to close it.`
+        : `Click to add corners (${drawing.length} so far). Click the first corner or Finish ${noun} to close it.`)
 
   return (
     <>
@@ -177,7 +230,7 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
         onClose={requestClose}
         onEscape={() => (drawing && !confirmClose ? cancelZone() : requestClose())}
         bodyClassName="flex flex-col"
-        title={`Detection zones · ${camera.name}`}
+        title={`${spots ? 'Watch spots' : 'Detection zones'} · ${camera.name}`}
         footer={
           // Every button is always there, so the picture never moves while you work
           <>
@@ -198,29 +251,23 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
               variant="ghost"
               icon={<Trash2 className="h-4 w-4" />}
               disabled={selected === null || !!drawing}
-              onClick={() => {
-                setZones((z) => z.filter((_, i) => i !== selected))
-                setSelected(null)
-              }}
+              onClick={() => remove((i) => i !== selected)}
             >
-              Delete zone
+              Delete {noun}
             </Button>
             <Button
               variant="ghost"
               disabled={!zones.length || !!drawing}
-              title="Remove every zone, so the whole picture is watched"
-              onClick={() => {
-                setZones([])
-                setSelected(null)
-              }}
+              title={spots ? 'Remove every watch spot' : 'Remove every zone, so the whole picture is watched'}
+              onClick={() => remove(() => false)}
             >
               Clear all
             </Button>
             <Button variant="ghost" disabled={!drawing} onClick={cancelZone}>
-              Cancel zone
+              Cancel {noun}
             </Button>
             <Button disabled={!drawing || drawing.length < 3} onClick={() => drawing && finish(drawing)}>
-              Finish zone
+              Finish {noun}
             </Button>
             <Button variant="primary" disabled={!changed || !!drawing} loading={saving} onClick={save}>
               Save
@@ -259,7 +306,10 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
                   points={points(zone)}
                   fillRule="evenodd"
                   vectorEffect="non-scaling-stroke"
-                  className={cx('stroke-2', i === selected ? 'fill-blue-500/35 stroke-blue-400' : 'fill-cyan-400/20 stroke-cyan-300')}
+                  className={cx(
+                    'stroke-2',
+                    i === selected ? 'fill-blue-500/35 stroke-blue-400' : spots ? 'fill-violet-400/20 stroke-violet-300' : 'fill-cyan-400/20 stroke-cyan-300',
+                  )}
                 />
               ))}
               {drawing && <polyline points={points(drawing)} fillRule="evenodd" vectorEffect="non-scaling-stroke" className="fill-cyan-400/10 stroke-cyan-300 stroke-2" />}
@@ -271,10 +321,24 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
                   className={cx('absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center', drawing ? 'pointer-events-none' : 'cursor-move')}
                   style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
                 >
-                  <span className={cx('h-3.5 w-3.5 rounded-full border-2 border-white', zi === selected ? 'bg-blue-500' : 'bg-cyan-500')} />
+                  <span className={cx('h-3.5 w-3.5 rounded-full border-2 border-white', zi === selected ? 'bg-blue-500' : spots ? 'bg-violet-500' : 'bg-cyan-500')} />
                 </span>
               )),
             )}
+            {spots &&
+              zones.map((zone, i) => (
+                <span
+                  key={`name-${i}`}
+                  // Above the spot, or just inside it when it reaches the top of the picture
+                  className={cx(
+                    'pointer-events-none absolute max-w-[40%] truncate rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-violet-100',
+                    Math.min(...zone.map(([, y]) => y)) > 0.08 && '-translate-y-full',
+                  )}
+                  style={{ left: `${Math.min(...zone.map(([x]) => x)) * 100}%`, top: `${Math.min(...zone.map(([, y]) => y)) * 100}%` }}
+                >
+                  {names[i]}
+                </span>
+              ))}
             {drawing?.map(([x, y], i) => (
               <span
                 key={i}
@@ -286,8 +350,34 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
         </div>
         {/* Room for the longest message, so changing messages never move the picture */}
         <p className={cx('mt-2 min-h-8 shrink-0 text-xs sm:min-h-4', note || full ? 'text-amber-400' : 'text-zinc-400')}>{hint}</p>
+        {spots && (
+          <div className="mt-2 flex shrink-0 items-center gap-2">
+            <label htmlFor="spot-name" className="shrink-0 text-xs text-zinc-400">
+              Name
+            </label>
+            <input
+              id="spot-name"
+              className="input h-8 py-1 text-sm"
+              maxLength={40}
+              disabled={selected === null || !!drawing}
+              placeholder={zones.length ? 'Select a spot to name it' : 'Outline a spot first'}
+              value={selected !== null && !drawing ? (names[selected] ?? '') : ''}
+              onChange={(e) => {
+                const name = e.target.value
+                setNote(null)
+                setNames((n) => n.map((old, i) => (i === selected ? name : old)))
+              }}
+            />
+          </div>
+        )}
         <p className="mt-1 min-h-8 shrink-0 text-xs text-zinc-500 sm:min-h-4">
-          {zones.length === 0 ? 'No zones: the whole picture is watched.' : `${zones.length} zone${zones.length === 1 ? '' : 's'}`}
+          {spots
+            ? zones.length === 0
+              ? 'No watch spots yet.'
+              : `${zones.length} watch spot${zones.length === 1 ? '' : 's'}. Each is compared with how it usually looks; you're told when one looks different for 5 s or more with nobody in it.`
+            : zones.length === 0
+              ? 'No zones: the whole picture is watched.'
+              : `${zones.length} zone${zones.length === 1 ? '' : 's'}`}
           {changed ? (
             ' · not saved yet'
           ) : drawnOnOtherShape ? (
@@ -298,7 +388,7 @@ export default function ZoneEditor({ camera, onClose, onSaved }: { camera: Camer
       <ConfirmDialog
         open={confirmClose}
         title="Discard your changes?"
-        message="The zones you changed are not saved."
+        message={`The ${spots ? 'watch spots' : 'zones'} you changed are not saved.`}
         confirmLabel="Discard"
         onConfirm={onClose}
         onCancel={() => setConfirmClose(false)}

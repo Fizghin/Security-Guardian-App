@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Battery, BatteryCharging, Copy, FileVideo, Pencil, Plus, QrCode, ScanSearch, Smartphone, SquareDashed, Trash2, Usb, Wifi } from 'lucide-react'
+import { Battery, BatteryCharging, Copy, FileVideo, Pencil, Plus, QrCode, ScanEye, ScanSearch, Smartphone, SquareDashed, Trash2, Usb, Wifi } from 'lucide-react'
 import { api, type AudioOutput, type CameraConfig, type CameraStatus, type Pairing, type Settings, type SourceKind } from '../api'
 import { cx } from '../lib/cx'
 import { useStatus } from '../lib/status'
@@ -521,6 +521,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
   const [editing, setEditing] = useState<CameraConfig | null>(null)
   const [pairing, setPairing] = useState<CameraConfig | null>(null)
   const [zoning, setZoning] = useState<CameraConfig | null>(null)
+  const [spotting, setSpotting] = useState<CameraConfig | null>(null)
   const [removing, setRemoving] = useState<CameraConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [phoneDraft, setPhoneDraft] = useState(phoneSettings)
@@ -606,6 +607,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
                   <span>
                     {c.enabled ? <LiveState live={live} /> : 'Turned off'}
                     {c.zones.length > 0 && ` · ${c.zones.length} zone${c.zones.length === 1 ? '' : 's'}`}
+                    {c.watch_spots.length > 0 && ` · ${c.watch_spots.length} watch spot${c.watch_spots.length === 1 ? '' : 's'}`}
                     {c.enabled && live?.zones_mismatch && (
                       <span className="text-amber-400"> · The picture changed shape: redraw the zones</span>
                     )}
@@ -620,6 +622,9 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
                 )}
                 <Button size="sm" variant="ghost" icon={<SquareDashed className="h-4 w-4" />} onClick={() => setZoning(c)} title="Choose where people count">
                   Zones
+                </Button>
+                <Button size="sm" variant="ghost" icon={<ScanEye className="h-4 w-4" />} onClick={() => setSpotting(c)} title="Outline a gate, door or window to keep an eye on">
+                  Watch spots
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => toggle(c)}>
                   {c.enabled ? 'Turn off' : 'Turn on'}
@@ -660,6 +665,7 @@ export default function CamerasSection({ phoneSettings, savePhone }: { phoneSett
       <AddCameraDialog open={adding} count={cams?.length ?? 0} onClose={() => setAdding(false)} onAdded={changed} />
       <EditCameraDialog key={editing?.id ?? ''} camera={editing} onClose={() => setEditing(null)} onSaved={changed} />
       {zoning && <ZoneEditor key={zoning.id} camera={zoning} onClose={() => setZoning(null)} onSaved={changed} />}
+      {spotting && <ZoneEditor key={spotting.id} camera={spotting} mode="spots" onClose={() => setSpotting(null)} onSaved={changed} />}
       <Modal open={!!pairing} onClose={() => setPairing(null)} title={`Pair ${pairing?.name ?? ''}`} wide>
         {pairing && <PairingPanel camera={pairing} onReset={load} />}
       </Modal>

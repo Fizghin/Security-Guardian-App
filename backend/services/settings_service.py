@@ -28,6 +28,25 @@ def new_token() -> str:
     return secrets.token_urlsafe(18)
 
 
+class WatchSpot(BaseModel):
+    """A named area that should keep looking the way it usually does, e.g. a gate or a window."""
+    name: str = Field(..., min_length=1, max_length=40)
+    polygon: list[list[float]]
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, name):
+        return " ".join(name.split()) if isinstance(name, str) else name
+
+    @field_validator("polygon")
+    @classmethod
+    def _polygon(cls, polygon: list[list[float]]):
+        try:
+            return clean_zone(polygon)
+        except ValueError as exc:  # the same rules as zones
+            raise ValueError(str(exc).replace("zone", "watch spot").replace("Zone", "Watch spot")) from None
+
+
 class CameraConfig(BaseModel):
     id: str = Field(..., pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
     name: str = Field("Camera", min_length=1, max_length=40)
@@ -42,6 +61,8 @@ class CameraConfig(BaseModel):
     zones: list[list[list[float]]] = Field(default_factory=list)
     # The picture's width / height when the zones were drawn, to notice when it changes shape.
     zones_aspect: float | None = Field(None, ge=0.1, le=10)
+    # Named areas that should look as usual (a gate, a door, a window); see services/spot_watch.py.
+    watch_spots: list[WatchSpot] = Field(default_factory=list)
 
     @field_validator("zones")
     @classmethod
@@ -49,6 +70,16 @@ class CameraConfig(BaseModel):
         if len(zones) > 8:
             raise ValueError("At most 8 zones per camera")
         return [clean_zone(polygon) for polygon in zones]
+
+    @field_validator("watch_spots")
+    @classmethod
+    def _watch_spots(cls, spots: list[WatchSpot]):
+        if len(spots) > 8:
+            raise ValueError("At most 8 watch spots per camera")
+        names = [s.name.casefold() for s in spots]
+        if len(set(names)) != len(names):
+            raise ValueError("Each watch spot needs its own name")
+        return spots
 
     @property
     def is_phone(self) -> bool:
@@ -82,6 +113,12 @@ class DetectionSettings(BaseModel):
     visitor_retention_days: int = Field(90, ge=0, le=3650, description="0 = keep forever")
     # A sighting this long after the visitor was last seen counts as a new visit.
     visit_gap_minutes: int = Field(30, ge=0, le=1440)
+    # Bags (backpacks, handbags, suitcases) that stood still this long with nobody near them.
+    unattended_minutes: int = Field(2, ge=0, le=60, description="0 = off")
+    # Someone who may have fallen: logged with a picture, or also alerted, armed or not.
+    fall_alerts: Literal["off", "log", "alert"] = "alert"
+    # After a fall alert, ask "Are you OK?" through the camera's speaker.
+    fall_ask: bool = True
 
 
 class EscalationSettings(BaseModel):

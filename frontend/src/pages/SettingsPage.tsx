@@ -437,6 +437,23 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
           <Slider label="Sound sensitivity" value={d.draft.sound_sensitivity} min={1} max={10} format={(v) => `${v} of 10`} onChange={(v) => d.set('sound_sensitivity', v)} hint={`Counts sounds ${50 - 4 * d.draft.sound_sensitivity} dB or more above what that place usually sounds like. Higher catches quieter sounds.`} />
         )}
       </div>
+      <div className="grid gap-5 border-t border-zinc-800 pt-4 sm:grid-cols-2">
+        <Field label="Bags left unattended after" hint="A backpack, handbag or suitcase that stands still this long with nobody near it is logged, and you're alerted while armed. Bags already there when the camera starts don't count. 0 turns this off.">
+          <NumberInput value={d.draft.unattended_minutes} min={0} max={60} suffix="min" onChange={(v) => d.set('unattended_minutes', v)} />
+        </Field>
+        <Field label="Someone may have fallen" hint="Checks the posture of people who look like they're lying down; 10 s on the floor without getting up counts. Alerts go out armed or not, insiders included. Downloads a small pose model on first use.">
+          <select className="input" value={d.draft.fall_alerts} onChange={(e) => d.set('fall_alerts', e.target.value as Settings['detection']['fall_alerts'])}>
+            <option value="off">Don't check</option>
+            <option value="log">Log it with a picture</option>
+            <option value="alert">Log it and alert me</option>
+          </select>
+        </Field>
+        {d.draft.fall_alerts === 'alert' && (
+          <div className="sm:col-span-2">
+            <Toggle checked={d.draft.fall_ask} onChange={(v) => d.set('fall_ask', v)} label="Ask “Are you OK?”" description="Through the camera's speaker, and only after the alert was actually sent: “Are you OK? I've let the owner know.”" />
+          </div>
+        )}
+      </div>
       {d.draft.face_recognition && (
         <div className="space-y-4 border-t border-zinc-800 pt-4">
           <Toggle
@@ -836,6 +853,7 @@ function SystemSection() {
         <Stat label="Siren player" value={s.siren.available ? s.siren.player : 'Not available'} warn={!s.siren.available} />
         <Stat label="Talk on this computer" value={!s.talk.mode ? 'No audio player' : `${s.talk.player} · ${s.talk.mode === 'live' ? 'as you speak' : 'when you let go'}`} warn={!s.talk.mode} />
         <Stat label="Face models" value={s.faces.state} warn={s.faces.state === 'error'} />
+        <Stat label="Fall check model" value={s.pose.state === 'idle' ? 'Loads when someone may be lying down' : s.pose.state} warn={s.pose.state === 'error'} />
         <Stat label="Platform" value={`${s.platform} · Python ${s.python}`} />
         <Stat label="Phone cameras" value={!s.phone.enabled ? 'Turned off' : s.phone.public_url || `https://${s.phone.addresses[0] ?? 'this computer'}:${s.phone.port}`} />
       </div>

@@ -136,6 +136,9 @@ const EVENT_LABELS: Record<string, string> = {
   CAMERA_ONLINE: 'Camera online',
   SOUND: 'Loud sound',
   TALK: 'Talk',
+  UNATTENDED: 'Unattended bag',
+  FALL: 'Possible fall',
+  SPOT: 'Watch spot',
 }
 
 export const eventLabel = (type: string) =>
