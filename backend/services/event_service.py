@@ -5,6 +5,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import func
 
@@ -28,10 +29,14 @@ class EventService:
     def __init__(self, snapshot_dir: Path = SNAPSHOTS_DIR):
         self._lock = threading.Lock()
         self.snapshot_dir = snapshot_dir
+        # The evidence vault seals each picture and records each deletion
+        self.on_saved: Callable[[Path], None] | None = None
+        self.on_deleted: Callable[[str, str], None] | None = None
 
     def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
-            camera: str | None = None, snapshot: bytes | None = None) -> int | None:
-        """snapshot: a JPEG of the moment, shown with the event in the dashboard. Returns the event's id."""
+            camera: str | None = None, snapshot: bytes | None = None, incident: str | None = None) -> int | None:
+        """snapshot: a JPEG of the moment, shown with the event in the dashboard. incident: the id of the
+        camera's incident this event belongs to. Returns the event's id."""
         severity = severity.upper() if severity.upper() in SEVERITIES else "INFO"
         print(f"[event] {severity:<8} {event_type}{f' [{camera}]' if camera else ''}: {description}")
         now = utcnow()
@@ -47,6 +52,7 @@ class EventService:
                     recording=recording,
                     camera=camera,
                     snapshot=picture,
+                    incident=incident,
                 )
                 db.add(row)
                 db.flush()
@@ -58,6 +64,7 @@ class EventService:
                 print(f"[event] Failed to store event: {exc}")
                 if picture:
                     (self.snapshot_dir / picture).unlink(missing_ok=True)  # no event refers to it
+                    self._deleted(picture, "Its event could not be stored")
                 return None
             finally:
                 db.close()
@@ -67,10 +74,16 @@ class EventService:
         try:
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
             (self.snapshot_dir / name).write_bytes(jpeg)
-            return name
         except OSError as exc:
             print(f"[event] Could not save snapshot: {exc}")
             return None
+        if self.on_saved:
+            self.on_saved(self.snapshot_dir / name)  # only queues the sealing
+        return name
+
+    def _deleted(self, name: str, reason: str) -> None:
+        if self.on_deleted:
+            self.on_deleted(name, reason)
 
     def pictures(self, event_ids: list[int]) -> dict[int, dict]:
         """The events with these ids that still exist, for showing their pictures elsewhere."""
@@ -114,6 +127,7 @@ class EventService:
         for name in names:
             if Path(name).name == name:
                 (self.snapshot_dir / name).unlink(missing_ok=True)
+                self._deleted(name, f"Older than {retention_days} days (automatic clean-up)")
         orphans = 0
         stale = time.time() - ORPHAN_SECONDS  # never a picture whose event is being stored right now
         for picture in self.snapshot_dir.glob("*.jpg"):
@@ -121,6 +135,7 @@ class EventService:
                 if picture.name not in referenced and picture.stat().st_mtime < stale:
                     picture.unlink()
                     orphans += 1
+                    self._deleted(picture.name, "No event refers to it")
             except OSError:
                 pass  # already gone, e.g. the log was cleared meanwhile
         return len(names) + orphans
@@ -234,6 +249,7 @@ class EventService:
                 db.close()
             for picture in self.snapshot_dir.glob("*.jpg"):
                 picture.unlink(missing_ok=True)
+                self._deleted(picture.name, "The event log was cleared")
         return n
 
 

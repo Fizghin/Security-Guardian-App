@@ -35,6 +35,7 @@ class SecurityEvent(Base):
     recording = Column(String, nullable=True)  # file name in storage/recordings
     camera = Column(String, nullable=True, index=True)  # camera name at the time of the event
     snapshot = Column(String, nullable=True)  # picture of the moment, file name in storage/snapshots
+    incident = Column(String, nullable=True, index=True)  # the camera's incident, set by its brain
 
     def to_dict(self) -> dict:
         return {
@@ -48,6 +49,7 @@ class SecurityEvent(Base):
             # The picture's file name, so its URL changes with the file: ids start again at 1 after
             # the log is cleared, and a browser must not show a deleted picture it cached.
             "snapshot": self.snapshot or None,
+            "incident": self.incident,
         }
 
 
@@ -107,6 +109,9 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN camera VARCHAR"))
         if "snapshot" not in existing:
             conn.execute(text("ALTER TABLE security_events ADD COLUMN snapshot VARCHAR"))
+        if "incident" not in existing:
+            conn.execute(text("ALTER TABLE security_events ADD COLUMN incident VARCHAR"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_security_events_incident ON security_events (incident)"))
 
 
 def get_db():

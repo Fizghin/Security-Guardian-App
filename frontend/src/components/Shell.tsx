@@ -41,10 +41,10 @@ function Sidebar({ page, open, onClose }: { page: Page; open: boolean; onClose: 
 
   return (
     <>
-      <div className={cx('fixed inset-0 z-30 bg-black/60 lg:hidden', open ? 'block' : 'hidden')} onClick={onClose} />
+      <div className={cx('fixed inset-0 z-30 bg-black/60 lg:hidden print:hidden', open ? 'block' : 'hidden')} onClick={onClose} />
       <aside
         className={cx(
-          'fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-zinc-800 bg-zinc-950 transition-transform lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-zinc-800 bg-zinc-950 transition-transform lg:static lg:translate-x-0 print:hidden',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -126,7 +126,7 @@ function TopBar({ page, onMenu }: { page: Page; onMenu: () => void }) {
   const schedule = status && describeSchedule(status.schedule, status.armed)?.short
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800 px-4">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800 px-4 print:hidden">
       <button type="button" className="-ml-1 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 lg:hidden" onClick={onMenu} aria-label="Open menu">
         <Menu className="h-5 w-5" />
       </button>
@@ -238,13 +238,15 @@ function AlarmBanner() {
 export default function Shell({ page, children }: { page: Page; children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false)
   return (
-    <div className="flex h-full">
+    <div className="flex h-full print:block print:h-auto">
       <Sidebar page={page} open={menuOpen} onClose={() => setMenuOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar page={page} onMenu={() => setMenuOpen(true)} />
-        <AlarmBanner />
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1400px] p-4 lg:p-6">{children}</div>
+        <div className="print:hidden">
+          <AlarmBanner />
+        </div>
+        <main className="flex-1 overflow-y-auto print:overflow-visible">
+          <div className="mx-auto max-w-[1400px] p-4 lg:p-6 print:p-0">{children}</div>
         </main>
       </div>
     </div>

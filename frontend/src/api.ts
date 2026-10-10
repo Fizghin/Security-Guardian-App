@@ -157,6 +157,8 @@ export interface SecurityEvent {
   camera: string | null
   /** File name of the picture of the moment, shown with eventSnapshotUrl; null when there is none. */
   snapshot: string | null
+  /** The camera's incident this event belongs to, for its report; null outside incidents. */
+  incident: string | null
 }
 
 export interface EventPage {
@@ -194,6 +196,8 @@ export interface Recording {
   camera_id: string | null
   camera: string | null
   thumbnail: boolean
+  /** Its seal in the evidence vault; null until it is sealed. */
+  vault: { sealed_at: string; sealed_late: boolean; sha256: string; seq: number } | null
 }
 
 export interface RecordingList {
@@ -407,7 +411,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, init)

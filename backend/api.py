@@ -30,6 +30,7 @@ from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
 from services.talk_service import TalkError, audio_hub, talk_player, talk_player_status
 from services.tts_service import tts_service
+from services.vault_service import evidence_vault
 from services.visitor_service import visitor_service
 
 router = APIRouter(prefix="/api")
@@ -562,7 +563,8 @@ def clear_events():
 @router.get("/recordings")
 def list_recordings(camera: str = ""):
     active = [{"camera": u.name(), **u.recorder.status()} for u in camera_manager.units.values() if u.recorder.active]
-    return {"items": recording_library.list(camera or None), "usage_bytes": recording_library.usage_bytes(),
+    items = [{**r, "vault": evidence_vault.seal_info("clip", r["file"])} for r in recording_library.list(camera or None)]
+    return {"items": items, "usage_bytes": recording_library.usage_bytes(),
             "active": active, "encoder": recording_library.encoder}
 
 
