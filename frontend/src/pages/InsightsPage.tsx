@@ -3,6 +3,7 @@ import { AlertTriangle, BellRing, Flame, Info, Map as MapIcon, Moon, RotateCcw, 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api, type CameraStatus, type Heatmap, type Insights } from '../api'
 import { Button, Card, ConfirmDialog, Empty, ErrorNote, Segmented, StatTile } from '../components/ui'
+import { CHART, chartTooltip } from '../lib/chart'
 import { cx } from '../lib/cx'
 import { formatShortDate } from '../lib/format'
 import { href } from '../lib/route'
@@ -17,8 +18,9 @@ const RANGES = [
 ]
 
 // One sequential hue (blue) for every count: darker cells are quieter on the dark surface.
-const BAR = '#3b82f6'
-const STEPS = ['bg-zinc-800/70', 'bg-blue-950', 'bg-blue-800', 'bg-blue-600', 'bg-blue-400', 'bg-blue-200']
+const BAR = CHART.bar
+// Steps chosen so the ramp stays in order in both themes (light mode maps 400 and 600 to the same blue).
+const STEPS = ['bg-zinc-800/70', 'bg-blue-950', 'bg-blue-800', 'bg-blue-500', 'bg-blue-300', 'bg-blue-100']
 
 const THREAT = {
   calm: { label: 'Calm', color: '#10b981', text: 'text-emerald-300' },
@@ -26,12 +28,6 @@ const THREAT = {
   elevated: { label: 'Elevated', color: '#f59e0b', text: 'text-amber-300' },
   high: { label: 'High', color: '#ef4444', text: 'text-red-300' },
 } as const
-
-const tooltipStyle = {
-  contentStyle: { background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 },
-  labelStyle: { color: '#e4e4e7' },
-  cursor: { fill: '#27272a' },
-}
 
 function ThreatGauge({ threat }: { threat: Insights['threat'] }) {
   const t = THREAT[threat.level]
@@ -41,7 +37,7 @@ function ThreatGauge({ threat }: { threat: Insights['threat'] }) {
   return (
     <div className="flex flex-col items-center sm:flex-row sm:items-center sm:gap-6">
       <svg viewBox="0 0 180 104" className="w-48 shrink-0" role="img" aria-label={`Threat score ${threat.score} of 100, ${t.label}`}>
-        <path d="M20 94 A70 70 0 0 1 160 94" fill="none" stroke="#27272a" strokeWidth="14" strokeLinecap="round" />
+        <path d="M20 94 A70 70 0 0 1 160 94" fill="none" stroke={CHART.grid} strokeWidth="14" strokeLinecap="round" />
         <path
           d="M20 94 A70 70 0 0 1 160 94"
           fill="none"
@@ -177,8 +173,8 @@ function CameraHeatmap({ camera }: { camera: CameraStatus }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40">
-      <div className="relative aspect-video bg-black">
+    <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/40">
+      <div className="force-dark relative aspect-video bg-black">
         {!noPicture && camera.connected ? (
           <img src={picture} alt="" className="h-full w-full object-cover opacity-60" onError={() => setNoPicture(true)} />
         ) : (
@@ -252,7 +248,7 @@ export default function InsightsPage() {
 
       {data && (
         <>
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
             <Card title="Right now">
               <ThreatGauge threat={data.threat} />
             </Card>
@@ -302,15 +298,15 @@ export default function InsightsPage() {
             )}
           </Card>
 
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
             <Card title="Incidents by hour of day">
               <div className="h-48">
                 <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 500, height: 192 }}>
                   <BarChart data={hourData} margin={{ top: 4, right: 4, bottom: 0, left: -24 }} barCategoryGap={2}>
-                    <CartesianGrid vertical={false} stroke="#27272a" />
-                    <XAxis dataKey="hour" tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#3f3f46' }} interval={5} />
-                    <YAxis allowDecimals={false} tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={false} />
-                    <Tooltip {...tooltipStyle} />
+                    <CartesianGrid vertical={false} stroke={CHART.grid} />
+                    <XAxis dataKey="hour" tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART.axis }} interval={5} />
+                    <YAxis allowDecimals={false} tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={false} />
+                    <Tooltip {...chartTooltip} />
                     <Bar dataKey="count" name="Incidents" fill={BAR} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -320,10 +316,10 @@ export default function InsightsPage() {
               <div className="h-48">
                 <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 500, height: 192 }}>
                   <BarChart data={dayData} margin={{ top: 4, right: 4, bottom: 0, left: -24 }} barCategoryGap={2}>
-                    <CartesianGrid vertical={false} stroke="#27272a" />
-                    <XAxis dataKey="label" tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#3f3f46' }} minTickGap={24} />
-                    <YAxis allowDecimals={false} tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={false} />
-                    <Tooltip {...tooltipStyle} />
+                    <CartesianGrid vertical={false} stroke={CHART.grid} />
+                    <XAxis dataKey="label" tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART.axis }} minTickGap={24} />
+                    <YAxis allowDecimals={false} tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={false} />
+                    <Tooltip {...chartTooltip} />
                     <Bar dataKey="incidents" name="Incidents" fill={BAR} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -336,7 +332,7 @@ export default function InsightsPage() {
               <table className="w-full min-w-[520px] text-sm">
                 <thead className="text-left text-xs text-zinc-500">
                   <tr>
-                    {['Camera', 'Incidents', 'Alerts', 'Sirens', 'Loud sounds', 'Insiders seen', 'Went offline'].map((h) => (
+                    {['Camera', 'Incidents', 'Alerts', 'Sirens', 'Loud sounds', 'Left objects', 'Insiders seen', 'Went offline'].map((h) => (
                       <th key={h} className="px-4 py-2 font-medium">
                         {h}
                       </th>
@@ -360,6 +356,7 @@ export default function InsightsPage() {
                         <td className="px-4 py-2.5 text-zinc-300">{c.alerts}</td>
                         <td className="px-4 py-2.5 text-zinc-300">{c.sirens}</td>
                         <td className="px-4 py-2.5 text-zinc-300">{c.sounds}</td>
+                        <td className="px-4 py-2.5 text-zinc-300">{c.unattended}</td>
                         <td className="px-4 py-2.5 text-zinc-300">{c.insiders}</td>
                         <td className="px-4 py-2.5 text-zinc-300">{c.offline}</td>
                       </tr>

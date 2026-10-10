@@ -97,8 +97,8 @@ export default function LiveVideo({
       ref={boxRef}
       onClick={onSelect}
       className={cx(
-        'relative aspect-video w-full overflow-hidden rounded-lg border bg-black',
-        level >= 3 ? 'border-red-600' : selected ? 'border-blue-500' : 'border-zinc-800',
+        'force-dark group relative aspect-video w-full overflow-hidden rounded-2xl border bg-black shadow-lg shadow-black/20 transition-[border-color,box-shadow]',
+        level >= 3 ? 'border-red-600 shadow-red-900/40 ring-2 ring-red-600/40' : selected ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-zinc-800 hover:border-zinc-700',
         onSelect && 'cursor-pointer',
       )}
     >

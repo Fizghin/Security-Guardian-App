@@ -6,9 +6,9 @@ type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'inverse'
 type Size = 'sm' | 'md'
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-blue-600 text-white hover:bg-blue-500 disabled:hover:bg-blue-600',
-  secondary: 'border border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 disabled:hover:bg-zinc-900',
-  danger: 'bg-red-600 text-white hover:bg-red-500 disabled:hover:bg-red-600',
+  primary: 'bg-blue-600 text-white shadow-sm shadow-blue-900/30 hover:bg-blue-500 disabled:hover:bg-blue-600',
+  secondary: 'border border-zinc-700 bg-zinc-900 text-zinc-100 shadow-sm hover:border-zinc-600 hover:bg-zinc-800 disabled:hover:bg-zinc-900',
+  danger: 'bg-red-600 text-white shadow-sm shadow-red-900/30 hover:bg-red-500 disabled:hover:bg-red-600',
   ghost: 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100',
   inverse: 'bg-white text-red-700 hover:bg-red-50',
 }
@@ -29,7 +29,7 @@ export function Button({
       {...rest}
       disabled={disabled || loading}
       className={cx(
-        'inline-flex shrink-0 items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex shrink-0 items-center justify-center gap-2 rounded-lg font-medium transition-all active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
         size === 'sm' ? 'h-8 px-2.5 text-xs' : 'h-9 px-3.5 text-sm',
         VARIANTS[variant],
         className,
@@ -57,14 +57,14 @@ export function Card({
   id?: string
 }) {
   return (
-    <section id={id} className={cx('rounded-xl border border-zinc-800 bg-zinc-900/60 shadow-sm shadow-black/20', className)}>
+    <section id={id} className={cx('rounded-2xl border border-zinc-800 bg-zinc-900/60 shadow-sm shadow-black/10', className)}>
       {(title || actions) && (
-        <header className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2.5">
-          {title && <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>}
+        <header className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-5 py-3">
+          {title && <h2 className="text-sm font-semibold tracking-tight text-zinc-100">{title}</h2>}
           {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cx('p-4', bodyClassName)}>{children}</div>
+      <div className={cx('p-5', bodyClassName)}>{children}</div>
     </section>
   )
 }
@@ -73,7 +73,7 @@ export function Badge({ className, children }: { className?: string; children: R
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
         className ?? 'bg-zinc-800 text-zinc-300 ring-zinc-700',
       )}
     >
@@ -179,15 +179,15 @@ export function Segmented<T extends string | number>({
   onChange: (v: T) => void
 }) {
   return (
-    <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
+    <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900 p-0.5 shadow-sm">
       {options.map((o) => (
         <button
           key={String(o.value)}
           type="button"
           onClick={() => onChange(o.value)}
           className={cx(
-            'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-            o.value === value ? 'bg-zinc-700 text-zinc-50' : 'text-zinc-400 hover:text-zinc-200',
+            'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+            o.value === value ? 'bg-zinc-700/80 text-zinc-50 shadow-sm' : 'text-zinc-400 hover:text-zinc-200',
           )}
         >
           {o.label}
@@ -226,21 +226,21 @@ export function Modal({
 
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-modal="true"
-        className={cx('flex max-h-full w-full flex-col rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl', wide ? 'max-w-4xl' : 'max-w-md')}
+        className={cx('flex max-h-full w-full animate-scale-in flex-col rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/40', wide ? 'max-w-4xl' : 'max-w-md')}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-4 py-3">
+        <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-3.5">
           <h2 className="truncate text-sm font-semibold">{title}</h2>
           <button type="button" onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" aria-label="Close">
             <X className="h-4 w-4" />
           </button>
         </header>
-        <div className={cx('overflow-auto p-4', bodyClassName)}>{children}</div>
-        {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-zinc-800 px-4 py-3">{footer}</footer>}
+        <div className={cx('overflow-auto p-5', bodyClassName)}>{children}</div>
+        {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-zinc-800 px-5 py-3">{footer}</footer>}
       </div>
     </div>
   )
@@ -295,7 +295,7 @@ export function Empty({ icon, title, children }: { icon?: ReactNode; title: stri
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{children}</div>
+  return <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">{children}</div>
 }
 
 export function StatTile({
@@ -329,9 +329,9 @@ export function StatTile({
       {detail && <div className="mt-0.5 truncate text-xs text-zinc-500">{detail}</div>}
     </>
   )
-  const cls = 'block rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 transition-colors'
+  const cls = 'group relative block overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 shadow-sm transition-all'
   return href ? (
-    <a href={href} className={cx(cls, 'hover:border-zinc-600')}>
+    <a href={href} className={cx(cls, 'hover:-translate-y-0.5 hover:border-zinc-600 hover:shadow-lg')}>
       {body}
     </a>
   ) : (

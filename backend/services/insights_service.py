@@ -92,6 +92,9 @@ def insights(days: int = 30, now: datetime | None = None, session_factory=Sessio
             totals["insiders"] += 1
         elif etype == "VISITOR":
             totals["returning"] += 1
+        elif etype == "UNATTENDED":
+            per_camera[cam]["unattended"] += 1
+            totals["unattended"] += 1
         elif etype == "CAMERA_OFFLINE":
             per_camera[cam]["offline"] += 1
             totals["offline"] += 1
@@ -122,7 +125,7 @@ def insights(days: int = 30, now: datetime | None = None, session_factory=Sessio
     score, reasons = _threat_score(recent, tonight, baseline)
 
     cameras = sorted(({"camera": cam, **{k: c.get(k, 0) for k in ("incidents", "alerts", "sirens", "sounds",
-                                                                   "insiders", "offline")}}
+                                                                   "insiders", "offline", "unattended")}}
                       for cam, c in per_camera.items() if cam != "System"),
                      key=lambda r: (-r["incidents"], -r["alerts"], r["camera"]))
 
@@ -137,9 +140,9 @@ def insights(days: int = 30, now: datetime | None = None, session_factory=Sessio
         "series": series,
         "cameras": cameras,
         "totals": {k: totals.get(k, 0) for k in ("incidents", "alerts", "sirens", "sounds", "insiders", "returning",
-                                                 "offline")},
+                                                 "offline", "unattended")},
         "last_24h": {"incidents": recent["DETECTION"], "alerts": recent["ALERT"], "sirens": recent["SIREN"],
-                     "sounds": recent["SOUND"], "night_incidents": tonight},
+                     "sounds": recent["SOUND"], "unattended": recent["UNATTENDED"], "night_incidents": tonight},
         "night": {"start": NIGHT_START, "end": NIGHT_END, "last_night": tonight, "baseline": round(baseline, 2),
                   "ratio": round(night_ratio, 2)},
         "threat": {"score": score, "level": _score_level(score), "reasons": reasons},
@@ -165,6 +168,9 @@ def _threat_score(recent: Counter, tonight: int, baseline: float) -> tuple[int, 
         parts.append((min(15, 3 * recent["DETECTION"]), f"{recent['DETECTION']} incident{'s' if recent['DETECTION'] > 1 else ''} in daytime"))
     if recent["SOUND"]:
         parts.append((min(10, 2 * recent["SOUND"]), f"{recent['SOUND']} loud sound{'s' if recent['SOUND'] > 1 else ''}"))
+    if recent["UNATTENDED"]:
+        n = recent["UNATTENDED"]
+        parts.append((min(20, 10 * n), f"{n} unattended object{'s' if n > 1 else ''} left behind"))
     if recent["CAMERA_OFFLINE"]:
         parts.append((min(10, 5 * recent["CAMERA_OFFLINE"]), "A camera went offline"))
     score = min(100, sum(p for p, _ in parts))

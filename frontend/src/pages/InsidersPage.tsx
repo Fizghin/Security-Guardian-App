@@ -304,7 +304,7 @@ export default function InsidersPage() {
   const faces = data?.faces
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <div className="space-y-4">
         <Card title="Add a person">
           <p className="mb-4 text-sm text-zinc-400">

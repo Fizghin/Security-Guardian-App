@@ -99,3 +99,19 @@ def test_clean_up_never_takes_a_starting_clip_for_a_leftover(library, monkeypatc
     finally:
         recorder.shutdown()
     assert recorder.file is None and (library.dir / name).exists()
+
+
+def test_protected_clips_survive_retention_and_deletion(library, tmp_path):
+    import os
+    clip = tmp_path / "20200101_000000_cam1_intruder.mp4"
+    clip.write_bytes(b"x")
+    old = 1_000_000_000
+    os.utime(clip, (old, old))
+    library.protect(clip.name, True)
+    assert library.list()[0]["protected"] is True
+    with pytest.raises(PermissionError):
+        library.delete(clip.name)
+    assert library.prune(30) == 0 and clip.exists()
+    library.protect(clip.name, False)
+    assert library.list()[0]["protected"] is False
+    assert library.prune(30) == 1 and not clip.exists()

@@ -10,25 +10,9 @@ import { cx } from '../lib/cx'
 import { formatDuration, LEVELS, timeAgo } from '../lib/format'
 import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
+import { local } from '../lib/storage'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
-
-const store = {
-  get: (key: string) => {
-    try {
-      return localStorage.getItem(key)
-    } catch {
-      return null
-    }
-  },
-  set: (key: string, value: string) => {
-    try {
-      localStorage.setItem(key, value)
-    } catch {
-      // private mode or storage disabled: the choice just isn't remembered
-    }
-  },
-}
 
 const SOURCE_LABEL: Record<string, string> = {
   llm: 'written by the model',
@@ -241,7 +225,7 @@ function Overview({ status }: { status: Status }) {
         tone={live < status.cameras.length ? 'warn' : 'default'}
       />
       <StatTile
-        label="Threat score · 24 h"
+        label="Threat · 24 h"
         value={insights ? insights.threat.score : '–'}
         detail={insights ? `${insights.last_24h.incidents} incident${insights.last_24h.incidents === 1 ? '' : 's'} · ${insights.threat.level}` : 'Loading…'}
         icon={insights?.threat.score ? <Gauge className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
@@ -265,18 +249,18 @@ export default function LivePage() {
   const { data: events } = usePoll(() => api.events({}, 15), 3000)
   const [clip, setClip] = useState<string | null>(null)
   const [picture, setPicture] = useState<SecurityEvent | null>(null)
-  const [selectedId, setSelectedId] = useState(() => store.get('live.camera'))
-  const [layout, setLayout] = useState<'grid' | 'single'>(() => (store.get('live.layout') === 'single' ? 'single' : 'grid'))
+  const [selectedId, setSelectedId] = useState(() => local.get('live.camera'))
+  const [layout, setLayout] = useState<'grid' | 'single'>(() => (local.get('live.layout') === 'single' ? 'single' : 'grid'))
 
   const cameras = status?.cameras ?? []
   const selected = cameras.find((c) => c.id === selectedId) ?? cameras[0]
   const select = (id: string) => {
     setSelectedId(id)
-    store.set('live.camera', id)
+    local.set('live.camera', id)
   }
   const changeLayout = (l: 'grid' | 'single') => {
     setLayout(l)
-    store.set('live.layout', l)
+    local.set('live.layout', l)
   }
 
   if (status && cameras.length === 0) {
@@ -295,7 +279,7 @@ export default function LivePage() {
   return (
     <div className="space-y-4">
       {status && <Overview status={status} />}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-4">
           {cameras.length > 1 && (
             <div className="flex items-center justify-between gap-2">

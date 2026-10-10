@@ -233,3 +233,14 @@ def test_evidence_insights_and_heatmap_endpoints(client):
     for path in ("/api/recordings/nope.mp4/verify", "/api/recordings/nope.mp4/report",
                  "/api/recordings/nope.mp4/report.html"):
         assert client.get(path).status_code == 404
+
+
+def test_digest_and_protect_endpoints(client):
+    preview = client.get("/api/digest/preview").json()
+    assert preview["title"].startswith("Guardian daily digest") and "Threat score" in preview["message"]
+    assert client.post("/api/digest/send").status_code == 409  # no channel set up in tests
+    assert client.put("/api/recordings/nope.mp4/protect", json={"protected": True}).status_code == 404
+    s = client.patch("/api/settings", json={"digest": {"enabled": True, "time": "07:30"}}).json()
+    assert s["digest"] == {"enabled": True, "time": "07:30", "skip_quiet": False}
+    assert client.patch("/api/settings", json={"digest": {"time": "25:00"}}).status_code == 422
+    client.patch("/api/settings", json={"digest": {"enabled": False}})

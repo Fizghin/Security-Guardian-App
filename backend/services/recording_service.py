@@ -121,6 +121,7 @@ class RecordingLibrary:
                 "camera_id": meta.get("camera_id"),
                 "camera": meta.get("camera"),
                 "thumbnail": f.with_suffix(".jpg").exists(),
+                "protected": f.with_suffix(".keep").exists(),
             })
         out.sort(key=lambda r: r["started"], reverse=True)
         return out
@@ -134,10 +135,22 @@ class RecordingLibrary:
             raise FileNotFoundError(name)
         return path
 
+    def protect(self, name: str, keep: bool) -> bool:
+        """A protected clip is kept forever: retention skips it and it can't be deleted until unprotected.
+        A separate marker file, so the clip's sealed details stay untouched."""
+        marker = self.path(name).with_suffix(".keep")
+        if keep:
+            marker.write_text("kept by the owner\n", encoding="utf-8")
+        else:
+            marker.unlink(missing_ok=True)
+        return keep
+
     def delete(self, name: str) -> None:
         if Path(name).name in self.in_progress:
             raise PermissionError("Recording is still in progress")
         video = self.path(name)
+        if video.with_suffix(".keep").exists():
+            raise PermissionError("This clip is protected. Remove the protection first.")
         for suffix in (".mp4", ".jpg", ".json"):
             video.with_suffix(suffix).unlink(missing_ok=True)
         self._removed(video.name, "deleted from the dashboard")
@@ -151,7 +164,8 @@ class RecordingLibrary:
         if retention_days > 0:
             cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
             for f in self.dir.glob("*.mp4"):
-                if not f.name.endswith(".part.mp4") and f.stat().st_mtime < cutoff:
+                if (not f.name.endswith(".part.mp4") and not f.with_suffix(".keep").exists()
+                        and f.stat().st_mtime < cutoff):
                     for suffix in (".mp4", ".jpg", ".json"):
                         f.with_suffix(suffix).unlink(missing_ok=True)
                     self._removed(f.name, f"older than the {retention_days}-day retention period")

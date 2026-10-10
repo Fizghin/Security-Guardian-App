@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, FileText, Trash2 } from 'lucide-react'
+import { Download, FileText, Lock, LockOpen, Trash2 } from 'lucide-react'
 import { api, type IncidentReport, type Recording } from '../api'
 import { eventLabel, formatBytes, formatDateTime, formatDuration, reasonLabel, SEVERITY_COLOR } from '../lib/format'
 import { errorMessage, useToast } from '../lib/toast'
@@ -70,6 +70,7 @@ export default function RecordingPlayer({
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [isProtected, setIsProtected] = useState(!!recording?.protected)
   // Why a clip opened from the event log doesn't load: it is still being recorded, or it is no longer on disk.
   const [missing, setMissing] = useState<'recording' | 'gone' | null>(null)
 
@@ -100,6 +101,20 @@ export default function RecordingPlayer({
     }
   }
 
+  const toggleProtect = async () => {
+    setBusy(true)
+    try {
+      const { protected: kept } = await api.protectRecording(file, !isProtected)
+      setIsProtected(kept)
+      notify(kept ? 'Clip protected: it is kept forever' : 'Protection removed', 'success')
+      onDeleted?.()
+    } catch (err) {
+      notify(errorMessage(err), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const encodedWithoutFfmpeg = recording?.playable === false
   const playable = !encodedWithoutFfmpeg && !failed
 
@@ -120,8 +135,25 @@ export default function RecordingPlayer({
                 </span>
               )}
               {onDeleted && (
-                <Button variant="ghost" icon={<Trash2 className="h-4 w-4" />} onClick={() => setConfirm(true)}>
+                <Button
+                  variant="ghost"
+                  icon={<Trash2 className="h-4 w-4" />}
+                  disabled={isProtected}
+                  title={isProtected ? 'Protected clips cannot be deleted' : undefined}
+                  onClick={() => setConfirm(true)}
+                >
                   Delete
+                </Button>
+              )}
+              {recording && !missing && (
+                <Button
+                  variant={isProtected ? 'secondary' : 'ghost'}
+                  icon={isProtected ? <Lock className="h-4 w-4 text-emerald-400" /> : <LockOpen className="h-4 w-4" />}
+                  loading={busy && !confirm}
+                  onClick={toggleProtect}
+                  title={isProtected ? 'Kept forever. Click to let retention delete it again.' : 'Keep this clip forever: retention skips it and it cannot be deleted'}
+                >
+                  {isProtected ? 'Protected' : 'Keep forever'}
                 </Button>
               )}
               {!missing && (
@@ -145,11 +177,11 @@ export default function RecordingPlayer({
             src={api.recordingUrl(file)}
             controls
             autoPlay
-            className="aspect-video w-full rounded bg-black"
+            className="aspect-video w-full rounded-xl bg-black"
             onError={loadFailed}
           />
         ) : (
-          <div className="flex aspect-video w-full flex-col items-center justify-center rounded bg-black p-6 text-center text-sm text-zinc-400">
+          <div className="force-dark flex aspect-video w-full flex-col items-center justify-center rounded-xl bg-black p-6 text-center text-sm text-zinc-400">
             <p className="text-zinc-200">
               {missing === 'recording' ? 'This clip is still being recorded.' : missing ? "This clip isn't available." : "This clip can't be played here."}
             </p>

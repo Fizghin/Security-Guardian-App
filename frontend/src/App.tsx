@@ -2,8 +2,10 @@ import { lazy, Suspense, useEffect, useMemo } from 'react'
 import { api } from './api'
 import Shell from './components/Shell'
 import ToastProvider from './components/ToastProvider'
+import { useAlarmAlerts } from './lib/alerts'
 import { PAGE_TITLES, useRoute } from './lib/route'
 import { StatusContext } from './lib/status'
+import { ThemeContext, useTheme } from './lib/theme'
 import { usePoll } from './lib/usePoll'
 import EvidencePage from './pages/EvidencePage'
 import InsidersPage from './pages/InsidersPage'
@@ -20,6 +22,9 @@ export default function App() {
   const { page, section } = useRoute()
   const { data, error, refresh } = usePoll(api.status, 1000)
   const statusValue = useMemo(() => ({ status: data, offline: !!error, refresh }), [data, error, refresh])
+  const { pref, choose } = useTheme()
+  const themeValue = useMemo(() => ({ pref, choose }), [pref, choose])
+  useAlarmAlerts(data)
 
   const alarm = !!data && (data.threat_level >= 3 || data.panic)
   useEffect(() => {
@@ -27,27 +32,29 @@ export default function App() {
   }, [alarm, page])
 
   return (
-    <ToastProvider>
-      <StatusContext.Provider value={statusValue}>
-        <Shell page={page}>
-          {page === 'live' && <LivePage />}
-          {page === 'events' && (
-            <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
-              <EventsPage />
-            </Suspense>
-          )}
-          {page === 'recordings' && <RecordingsPage />}
-          {page === 'insights' && (
-            <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
-              <InsightsPage />
-            </Suspense>
-          )}
-          {page === 'evidence' && <EvidencePage />}
-          {page === 'insiders' && <InsidersPage />}
-          {page === 'visitors' && <VisitorsPage />}
-          {page === 'settings' && <SettingsPage section={section} />}
-        </Shell>
-      </StatusContext.Provider>
-    </ToastProvider>
+    <ThemeContext.Provider value={themeValue}>
+      <ToastProvider>
+        <StatusContext.Provider value={statusValue}>
+          <Shell page={page}>
+            {page === 'live' && <LivePage />}
+            {page === 'events' && (
+              <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+                <EventsPage />
+              </Suspense>
+            )}
+            {page === 'recordings' && <RecordingsPage />}
+            {page === 'insights' && (
+              <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+                <InsightsPage />
+              </Suspense>
+            )}
+            {page === 'evidence' && <EvidencePage />}
+            {page === 'insiders' && <InsidersPage />}
+            {page === 'visitors' && <VisitorsPage />}
+            {page === 'settings' && <SettingsPage section={section} />}
+          </Shell>
+        </StatusContext.Provider>
+      </ToastProvider>
+    </ThemeContext.Provider>
   )
 }

@@ -23,14 +23,14 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={notify}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
+      <div className="pointer-events-none fixed bottom-20 right-4 z-[70] lg:bottom-4 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
         {toasts.map((t) => (
           <div
             key={t.id}
             className={cx(
-              'pointer-events-auto flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-sm shadow-lg',
+              'pointer-events-auto flex animate-fade-in items-start gap-2.5 rounded-xl border px-3.5 py-3 text-sm shadow-2xl shadow-black/30 backdrop-blur',
               t.kind === 'error' && 'border-red-900 bg-red-950 text-red-200',
-              t.kind === 'success' && 'border-zinc-700 bg-zinc-900 text-zinc-100',
+              t.kind === 'success' && 'border-zinc-700 bg-zinc-900/95 text-zinc-100',
               t.kind === 'info' && 'border-zinc-700 bg-zinc-900 text-zinc-100',
             )}
           >

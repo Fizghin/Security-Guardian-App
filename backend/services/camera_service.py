@@ -28,10 +28,12 @@ from services.ai_service import WarningContext, ai_service
 from services.audio_service import CameraSpeaker
 from services.brain_service import CameraBrain
 from services.detection_service import detection_service
+from services.digest_service import digest_scheduler
 from services.event_service import event_service
 from services.face_service import face_service
 from services.heatmap_service import Trails, heatmap_store
 from services.notification_service import notification_service
+from services.object_watch import UnattendedWatcher, describe as describe_object
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
 from services.schedule_service import AppliedEvent, last_event, next_change
@@ -74,7 +76,27 @@ def draw_trails(frame, trails, armed: bool, thick: int) -> None:
         cv2.circle(frame, pts[-1], thick + 2, color, -1, cv2.LINE_AA)
 
 
-def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool, zones=(), trails=()):
+def draw_objects(frame, objects, scale: float, thick: int) -> None:
+    """Unattended bags and suitcases: a dashed-looking amber box with how long they've been there."""
+    for bbox, label in objects:
+        x1, y1, x2, y2 = (int(v) for v in bbox)
+        for i in range(x1, x2, 12):
+            cv2.line(frame, (i, y1), (min(i + 6, x2), y1), AMBER, thick + 1)
+            cv2.line(frame, (i, y2), (min(i + 6, x2), y2), AMBER, thick + 1)
+        for j in range(y1, y2, 12):
+            cv2.line(frame, (x1, j), (x1, min(j + 6, y2)), AMBER, thick + 1)
+            cv2.line(frame, (x2, j), (x2, min(j + 6, y2)), AMBER, thick + 1)
+        (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, thick)
+        pad = int(4 * scale)
+        ty = y2 + th + base + 2 * pad
+        if ty > frame.shape[0]:
+            ty = max(th + base + 2 * pad, y1)
+        cv2.rectangle(frame, (x1, ty - th - base - 2 * pad), (x1 + tw + 2 * pad, ty), AMBER, -1)
+        cv2.putText(frame, label, (x1 + pad, ty - base - pad), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, (20, 20, 20),
+                    thick, cv2.LINE_AA)
+
+
+def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bool, zones=(), trails=(), objects=()):
     # Text and lines scale with the frame so labels stay readable on HD cameras.
     scale = max(0.5, frame.shape[1] / 1100)
     thick = max(1, round(scale * 1.5))
@@ -84,6 +106,8 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
         cv2.polylines(frame, [points], True, ZONE, thick, cv2.LINE_AA)
     if trails:
         draw_trails(frame, trails, armed, thick)
+    if objects:
+        draw_objects(frame, objects, scale, thick)
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.bbox)
         if d.simulated:
@@ -123,6 +147,7 @@ class CameraUnit:
         self.source = self._make_source(cfg)
         self.tracker = Tracker()
         self.trails = Trails()
+        self.objects = UnattendedWatcher()
         self.recorder = Recorder(cfg.id, self.name)
         self.audio = audio.relay(cfg.id)
         phone_send = (lambda cmd: hub.send(self.id, cmd)) if cfg.is_phone else None
@@ -291,7 +316,8 @@ class CameraUnit:
 
                 shown = self._detections if now - self._detections_time < BOX_HOLD_SECONDS else []
                 trails = self.trails.lines(now) if cfg.detection.motion_trails else ()
-                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones, trails)
+                left = [(o.bbox, describe_object(o, now)) for o in self.objects.flagged(now)]
+                annotated = draw_overlay(frame.copy(), shown, self.name(), cfg.armed, self.cfg.zones, trails, left)
                 jpeg = self._encode(annotated)
                 with self._lock:
                     self._annotated, self._raw = annotated, frame
@@ -310,8 +336,18 @@ class CameraUnit:
 
     def _detect(self, frame, now: float, cfg: Settings, simulating: bool) -> None:
         det = cfg.detection
-        detections = self.detector.detect_persons(frame, det.confidence, det.min_person_height)
+        watch = cfg.armed and det.unattended_objects != "off"
+        if hasattr(self.detector, "detect"):
+            detections, things = self.detector.detect(frame, det.confidence, det.min_person_height, objects=watch)
+        else:
+            detections, things = self.detector.detect_persons(frame, det.confidence, det.min_person_height), []
         detections = keep_in_zones(detections, frame.shape[1], frame.shape[0], self.cfg.zones)
+        if watch:
+            things = keep_in_zones(things, frame.shape[1], frame.shape[0], self.cfg.zones)
+            for obj in self.objects.update(things, detections, frame.shape[1], now, det.unattended_minutes * 60):
+                self._report_object(obj, frame, now, det.unattended_objects == "alert")
+        else:
+            self.objects.reset()
         # Strangers' faces are remembered only while armed, like everything else that is recorded.
         # Newcomers are then checked against remembered visitors as against insiders.
         remember = det.face_recognition and det.remember_visitors and cfg.armed and self.faces.ready
@@ -340,6 +376,17 @@ class CameraUnit:
         if remember:
             self.visitors.record(self.id, self.name(), detections, now, self.brain.picture_event)
         self.error = self.detector.error
+
+    def _report_object(self, obj, frame, now: float, alert: bool) -> None:
+        text = describe_object(obj, now)
+        jpeg = self._encode(draw_overlay(frame.copy(), [], self.name(), True, (), (), [(obj.bbox, text)]))
+        self.events.log("UNATTENDED", text, "MEDIUM", camera=self.name(), snapshot=jpeg)
+        if alert:
+            def send():
+                msg = f"{text} at {self.name()}, with nobody near it."
+                if self.notifier.send_alert(f"Unattended object: {self.name()}", msg, "MEDIUM", jpeg):
+                    self.events.log("ALERT", f"Owner alerted: {msg}", "MEDIUM", camera=self.name())
+            threading.Thread(target=send, daemon=True, name=f"object-alert:{self.id}").start()
 
     def _check_health(self, now: float) -> None:
         """Camera unplugged, covered phone, lost Wi-Fi: log it and alert while armed."""
@@ -611,6 +658,7 @@ class CameraManager:
             try:
                 self.check_schedule()
                 self.prune_old_media()
+                digest_scheduler.check(self.settings.get().digest, self.notifier, self.events)
                 visitor_service.expire(time.time())  # people who left while no camera checked for visitors
                 if self.settings.get().armed:
                     self.ai.keep_warm()

@@ -1,12 +1,10 @@
+@import './theme.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    color-scheme: dark;
-  }
-
   html,
   body,
   #root {
@@ -15,8 +13,8 @@
 
   body {
     @apply bg-zinc-950 text-zinc-100 font-sans text-sm antialiased;
-    background-image: radial-gradient(1200px 600px at 100% -10%, rgba(59, 130, 246, 0.07), transparent 60%),
-      radial-gradient(900px 500px at -10% 110%, rgba(99, 102, 241, 0.05), transparent 60%);
+    background-image: radial-gradient(1200px 600px at 100% -10%, rgb(var(--blue-500) / 0.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgb(var(--indigo-500) / 0.05), transparent 60%);
     background-attachment: fixed;
   }
 
@@ -44,7 +42,7 @@
 
 @layer components {
   .input {
-    @apply w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 transition-colors focus:border-blue-500 focus:outline-none disabled:opacity-50;
+    @apply w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 shadow-sm placeholder:text-zinc-500 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50;
   }
 
   .label {
@@ -57,5 +55,27 @@
 
   input[type='range'] {
     @apply w-full accent-blue-500;
+  }
+
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-zinc-700 bg-zinc-800 px-1 font-mono text-[10px] font-medium text-zinc-300;
+  }
+
+  /* Text over video and camera pictures: light, whatever the theme */
+  .force-dark {
+    color: rgb(var(--zinc-100));
+  }
+
+  .glass {
+    @apply border-zinc-800 bg-zinc-950/75 backdrop-blur-md;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

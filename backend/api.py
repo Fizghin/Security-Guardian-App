@@ -26,7 +26,7 @@ from services.insights_service import insights as build_insights
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
-from services import report_service
+from services import digest_service, report_service
 from services.schedule_service import time_zone
 from services.settings_service import PHONE_SOURCE, NotificationSettings, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
@@ -590,6 +590,18 @@ def get_thumbnail(name: str):
         raise HTTPException(404, "Thumbnail not found")
 
 
+class ProtectBody(BaseModel):
+    protected: bool
+
+
+@router.put("/recordings/{name}/protect")
+def protect_recording(name: str, body: ProtectBody):
+    try:
+        return {"protected": recording_library.protect(name, body.protected)}
+    except FileNotFoundError:
+        raise HTTPException(404, "Recording not found")
+
+
 @router.get("/recordings/{name}/verify")
 def verify_recording(name: str):
     try:
@@ -655,6 +667,23 @@ def evidence_ledger():
 def evidence_public_key():
     return Response(evidence_vault.public_key_pem(), media_type="application/x-pem-file",
                     headers={"Content-Disposition": 'attachment; filename="guardian-evidence-key.pem"'})
+
+
+# ---- daily digest ------------------------------------------------------------------
+@router.get("/digest/preview")
+def digest_preview():
+    return digest_service.build()
+
+
+@router.post("/digest/send")
+def digest_send():
+    digest = digest_service.build()
+    if not notification_service.status().get("any"):
+        raise HTTPException(409, "No notification channel is set up. Add one in Settings → Notifications.")
+    sent = notification_service.send_alert(digest["title"], digest["message"], digest["severity"])
+    if not sent:
+        raise HTTPException(502, "The digest could not be sent. Check Settings → Notifications.")
+    return {"ok": True, **digest}
 
 
 # ---- insights ---------------------------------------------------------------------

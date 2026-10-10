@@ -83,10 +83,15 @@ export default function RecordingsPage() {
               key={rec.file}
               type="button"
               onClick={() => setOpen(rec)}
-              className="group overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60 text-left transition-colors hover:border-zinc-600"
+              className="group overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-600 hover:shadow-lg"
             >
-              <div className="relative aspect-video bg-black">
+              <div className="force-dark relative aspect-video bg-black">
                 <Thumb rec={rec} />
+                {rec.protected && (
+                  <span className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-amber-300" title="Kept forever">
+                    <Lock className="h-3 w-3" /> Kept
+                  </span>
+                )}
                 {rec.sealed && (
                   <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300" title="Sealed in the evidence vault">
                     <Lock className="h-3 w-3" /> Sealed

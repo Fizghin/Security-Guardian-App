@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
 import { api, type AITestResult, type NotificationChannel, type NotificationResult, type ScheduleRule, type Settings, type SettingsPatch, type Status } from '../api'
+import { AlertControls, ThemePicker } from '../components/AlertControls'
 import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
-import { href } from '../lib/route'
+import { href, SETTINGS_SECTIONS } from '../lib/route'
 import { useStatus } from '../lib/status'
+import { useThemeContext } from '../lib/theme'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
 
@@ -450,6 +452,18 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
             <option value="alert">Log them and alert me while armed</option>
           </select>
         </Field>
+        <Field label="Unattended objects" hint="Backpacks, bags and suitcases that stay put with nobody near them, while armed. Logged with a picture, or also sent to you.">
+          <select className="input" value={d.draft.unattended_objects} onChange={(e) => d.set('unattended_objects', e.target.value as Settings['detection']['unattended_objects'])}>
+            <option value="off">Ignore</option>
+            <option value="log">Log them with a picture</option>
+            <option value="alert">Log them and alert me</option>
+          </select>
+        </Field>
+        {d.draft.unattended_objects !== 'off' && (
+          <Field label="Unattended after" hint="How long an object must stay in one place, alone">
+            <NumberInput value={d.draft.unattended_minutes} min={1} max={120} suffix="min" onChange={(v) => d.set('unattended_minutes', v)} />
+          </Field>
+        )}
         {d.draft.sound_alerts !== 'off' && (
           <Slider label="Sound sensitivity" value={d.draft.sound_sensitivity} min={1} max={10} format={(v) => `${v} of 10`} onChange={(v) => d.set('sound_sensitivity', v)} hint={`Counts sounds ${50 - 4 * d.draft.sound_sensitivity} dB or more above what that place usually sounds like. Higher catches quieter sounds.`} />
         )}
@@ -483,6 +497,77 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
         </div>
       )}
     </Section>
+  )
+}
+
+// ---- Daily digest ---------------------------------------------------------------------------
+function DigestSection({ value, save, channels }: { value: Settings['digest']; save: Save; channels: number }) {
+  const d = useDraft(value)
+  const notify = useToast()
+  const [preview, setPreview] = useState<string | null>(null)
+  const [busy, setBusy] = useState<'preview' | 'send' | null>(null)
+  const act = async (kind: 'preview' | 'send') => {
+    setBusy(kind)
+    try {
+      const r = kind === 'send' ? await api.sendDigest() : await api.digestPreview()
+      setPreview(`${r.title}\n\n${r.message}`)
+      if (kind === 'send') notify('Digest sent', 'success')
+    } catch (err) {
+      notify(errorMessage(err), 'error')
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <Section
+      id="digest"
+      title="Daily digest"
+      description="A short summary of the last 24 hours (incidents, alerts, clips, the threat score and the evidence vault), sent once a day through your notification channels."
+      dirty={d.dirty}
+      onReset={d.reset}
+      onSave={() => save({ digest: d.changes })}
+    >
+      <Toggle checked={d.draft.enabled} onChange={(v) => d.set('enabled', v)} label="Send a daily digest" description={channels ? undefined : 'Set up a notification channel above first.'} />
+      {d.draft.enabled && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Send at" hint="This computer's time. If it is off then, the digest goes out when it starts, up to 6 hours later.">
+            <input type="time" className="input" value={d.draft.time} onChange={(e) => d.set('time', e.target.value)} />
+          </Field>
+          <div className="pt-6">
+            <Toggle checked={d.draft.skip_quiet} onChange={(v) => d.set('skip_quiet', v)} label="Skip quiet days" description="Only send when something happened." />
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
+        <Button size="sm" loading={busy === 'preview'} onClick={() => act('preview')}>
+          Preview
+        </Button>
+        <Button size="sm" icon={<Send className="h-3.5 w-3.5" />} loading={busy === 'send'} disabled={!channels} onClick={() => act('send')}>
+          Send now
+        </Button>
+      </div>
+      {preview && <pre className="whitespace-pre-wrap rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 font-sans text-sm text-zinc-300">{preview}</pre>}
+    </Section>
+  )
+}
+
+// ---- Appearance --------------------------------------------------------------------------------
+function AppearanceSection() {
+  const theme = useThemeContext()
+  return (
+    <Card id="appearance" title="Appearance and browser alerts" className="scroll-mt-4">
+      <div className="grid gap-6 md:grid-cols-2">
+        <div>
+          <div className="label">Theme</div>
+          <ThemePicker value={theme.pref} onChange={theme.choose} />
+          <p className="hint mt-3">
+            Remembered in this browser. Press <span className="kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</span> anywhere to search
+            pages and run commands, or <span className="kbd">G</span> then a letter to jump to a page.
+          </p>
+        </div>
+        <AlertControls />
+      </div>
+    </Card>
   )
 }
 
@@ -864,17 +949,6 @@ function SystemSection() {
 }
 
 // ---- Page ------------------------------------------------------------------------------------
-const SECTIONS = [
-  ['cameras', 'Cameras'],
-  ['schedule', 'Schedule'],
-  ['ai', 'Language model'],
-  ['voice', 'Voice'],
-  ['detection', 'Detection'],
-  ['escalation', 'Escalation'],
-  ['recording', 'Recording'],
-  ['notifications', 'Notifications'],
-  ['system', 'System'],
-] as const
 
 export default function SettingsPage({ section }: { section: string }) {
   const notify = useToast()
@@ -909,12 +983,12 @@ export default function SettingsPage({ section }: { section: string }) {
   // Sections re-mount with fresh drafts whenever the saved values change.
   const k = (v: unknown) => JSON.stringify(v)
   return (
-    <div className="grid gap-6 lg:grid-cols-[180px_minmax(0,1fr)]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[180px_minmax(0,1fr)]">
       <nav className="hidden lg:block">
         <ul className="sticky top-0 space-y-0.5 text-sm">
-          {SECTIONS.map(([id, label]) => (
+          {SETTINGS_SECTIONS.map(([id, label]) => (
             <li key={id}>
-              <a href={`#/settings/${id}`} className={cx('block rounded px-2 py-1.5', section === id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:text-zinc-100')}>
+              <a href={`#/settings/${id}`} className={cx('block rounded-lg px-3 py-1.5 transition-colors', section === id ? 'bg-blue-500/10 font-medium text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100')}>
                 {label}
               </a>
             </li>
@@ -930,6 +1004,8 @@ export default function SettingsPage({ section }: { section: string }) {
         <EscalationSection key={k(settings.escalation)} value={settings.escalation} save={save} sirenAvailable={status?.siren.available} />
         <RecordingSection key={k(settings.recording)} value={settings.recording} save={save} encoder={sys.data?.recording_encoder} />
         <NotificationsSection key={k(settings.notifications)} value={settings.notifications} save={save} />
+        <DigestSection key={k(settings.digest)} value={settings.digest} save={save} channels={settings.notifications.configured.length} />
+        <AppearanceSection />
         <SystemSection />
       </div>
     </div>

@@ -86,6 +86,9 @@ class DetectionSettings(BaseModel):
     motion_trails: bool = True
     # Count where people walk on each camera's picture for the Insights page.
     activity_heatmap: bool = True
+    # Bags and suitcases that stay put with nobody near them, while armed.
+    unattended_objects: Literal["off", "log", "alert"] = "log"
+    unattended_minutes: int = Field(2, ge=1, le=120)
 
 
 class EscalationSettings(BaseModel):
@@ -163,6 +166,13 @@ class ScheduleSettings(BaseModel):
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
 
 
+class DigestSettings(BaseModel):
+    """A daily summary of the last 24 hours, sent through the notification channels."""
+    enabled: bool = False
+    time: str = Field("08:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    skip_quiet: bool = False  # don't send when nothing happened
+
+
 CHANNELS = ("discord", "telegram", "ntfy", "webhook", "email")
 # Address fields and the schemes they accept. Discord only ever hands out https:// webhooks.
 URL_FIELDS = {"discord_webhook": ("https",), "ntfy_url": ("https", "http"), "webhook_url": ("https", "http")}
@@ -232,6 +242,7 @@ class Settings(BaseModel):
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
     notifications: NotificationSettings = NotificationSettings()
+    digest: DigestSettings = DigestSettings()
 
     @field_validator("cameras")
     @classmethod

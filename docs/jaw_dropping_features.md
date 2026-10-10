@@ -7,7 +7,7 @@ Guardian is already an exceptional, privacy-first local security system. To make
 | # | Feature | Status |
 |---|---|---|
 | 1 | 3D spatial trajectory radar | **Partly built**: per-camera footstep heatmaps (Insights → *Where people walk*) and live motion trails. Cross-camera homography and ReID are still open. |
-| 2 | Visual anomaly sentinel | Open |
+| 2 | Visual anomaly sentinel | **Partly built**: unattended backpacks, bags and suitcases. Doors, poses and smoke are still open. |
 | 3 | Two-way AI "Guard Bot" | Open (two-way talk exists; speech-to-text is the missing piece) |
 | 4 | Acoustic incident engine | Partly built earlier: loud-sound alerts from phone microphones. Sound classification is still open. |
 | 5 | Incident forensic digest | **Built**: incident reports with summary, timeline, pictures and integrity proof, printable as PDF. |

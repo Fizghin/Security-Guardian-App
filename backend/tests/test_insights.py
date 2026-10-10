@@ -35,7 +35,7 @@ def test_grid_cameras_and_findings(session_factory):
     assert out["totals"]["incidents"] == 6, "tests don't count"
     assert sum(map(sum, out["grid"])) == 6 and out["hours"][18] == 5
     assert out["cameras"][0] == {"camera": "Porch", "incidents": 5, "alerts": 1, "sirens": 0, "sounds": 0,
-                                 "insiders": 0, "offline": 0}
+                                 "insiders": 0, "offline": 0, "unattended": 0}
     assert any("18:00–19:00" in f["text"] for f in out["findings"])
     assert any("Porch sees 83%" in f["text"] for f in out["findings"])
     assert out["threat"]["score"] > 0 and "owner alert" in out["threat"]["reasons"][0]

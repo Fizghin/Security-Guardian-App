@@ -5,6 +5,7 @@ import { api, SEVERITIES, type EventFilters, type SecurityEvent } from '../api'
 import EventRow, { EventPicture } from '../components/EventRow'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Button, Card, ConfirmDialog, Empty, ErrorNote, Segmented } from '../components/ui'
+import { CHART, chartTooltip } from '../lib/chart'
 import { eventLabel, formatDay, formatHour, SEVERITY_COLOR } from '../lib/format'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -140,14 +141,10 @@ export default function EventsPage() {
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 800, height: 192 }}>
             <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -24 }}>
-              <CartesianGrid vertical={false} stroke="#27272a" />
-              <XAxis dataKey="label" tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#3f3f46' }} minTickGap={24} />
-              <YAxis allowDecimals={false} tick={{ fill: '#71717a', fontSize: 11 }} tickLine={false} axisLine={false} />
-              <Tooltip
-                cursor={{ fill: '#27272a' }}
-                contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
-                labelStyle={{ color: '#e4e4e7' }}
-              />
+              <CartesianGrid vertical={false} stroke={CHART.grid} />
+              <XAxis dataKey="label" tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART.axis }} minTickGap={24} />
+              <YAxis allowDecimals={false} tick={{ fill: CHART.tick, fontSize: 11 }} tickLine={false} axisLine={false} />
+              <Tooltip {...chartTooltip} />
               {SEVERITIES.map((s) => (
                 <Bar key={s} dataKey={s} stackId="a" fill={SEVERITY_COLOR[s]} name={s.charAt(0) + s.slice(1).toLowerCase()} />
               ))}

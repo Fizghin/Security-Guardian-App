@@ -17,6 +17,10 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Insights**: a 0–100 threat score for the last 24 hours with the reasons behind it, a weekday × hour map of when incidents happen, night-activity checks against an average night, per-camera breakdowns and plain-language findings ("Front door sees 53% of all incidents").
 - **Where people walk**: per-camera heatmaps of everyone's footsteps drawn over the camera picture, with the busiest spots marked, and **motion trails** on the live picture and in clips showing where each person came from.
 - **Evidence vault**: every saved clip is fingerprinted with SHA-256 into an append-only, hash-chained ledger signed with an Ed25519 key that never leaves the computer. One click proves each clip is byte-for-byte unchanged; edits, trims, silent deletions or a rewritten ledger are flagged.
+- **Unattended objects**: a backpack, bag or suitcase that stays in one place with nobody near it while armed is logged with a picture, and optionally sent to you.
+- **Daily digest**: a once-a-day summary of the last 24 hours (incidents, alerts, clips, threat score, evidence vault) through your notification channels.
+- **Keep forever**: protect an important clip so the retention period never deletes it and it can't be deleted by mistake.
+- **Light and dark themes, command palette and browser alerts**: press Ctrl+K (⌘K on a Mac) to jump anywhere or run an action, and get a desktop notification and a chime in the browser when an alarm starts.
 - **Incident reports**: each clip gets a summary, a second-by-second timeline with pictures and its integrity proof, as a printable page (Print / Save as PDF).
 - Monitoring runs in the background whether or not the dashboard is open.
 
@@ -200,6 +204,22 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 The **Evidence vault** page seals clips automatically as they are saved, and clips saved before it existed when Guardian starts. **Verify all clips** recomputes every hash: *Verified* means the file is unchanged, *Tampered* that the video or its details changed, *Missing* that a sealed clip vanished without being deleted through Guardian. Deleting a clip, by hand or through the retention period, is itself recorded. **Download ledger** and **Download public key** let anyone check the signatures independently. Each clip's **Incident report** (in its player) shows the same check with the file's SHA-256, which can be compared with `sha256sum`, `shasum -a 256` or `certutil -hashfile`. The signing key is `storage/evidence/signing.key`: back it up with the ledger, and keep it private.
 
+## Unattended objects, digest and protected clips
+
+**Unattended objects** (Settings → Detection): while armed, the person detector also looks for backpacks, handbags and suitcases. One that stays in the same place for the set time (2 minutes by default), with nobody standing near it for at least 30 seconds of that, is logged once as *Unattended object* with a picture and drawn on the live view in amber. Choose *Log them and alert me* to have it sent to you as well. Moving the object restarts its clock; one that disappears for more than 30 seconds is forgotten. Detection zones apply to objects too.
+
+**Daily digest** (Settings → Daily digest): sent at the chosen time through every notification channel that is set up. If the computer is off at that time, it goes out when Guardian starts, up to 6 hours later. *Skip quiet days* sends nothing when nothing happened. **Preview** shows the text, **Send now** sends it at once (also in the command palette).
+
+**Keep forever**: the **Keep forever** button in a clip's player protects it. A protected clip shows *Kept* on the Recordings page, is skipped by the retention period and can't be deleted until the protection is removed. Protection is stored next to the clip (`.keep`), so the clip's sealed record in the evidence vault is unaffected.
+
+## Dashboard tips
+
+- **Ctrl+K / ⌘K** or **/** opens the command palette: go to any page, camera or settings section, arm or disarm, reset the alarm, verify all clips, send the digest, or change the theme.
+- **G then a letter** jumps to a page: L Live, E Events, R Recordings, I Insights, V Evidence vault, P Insiders, S Visitors, comma Settings.
+- **Theme**: the sun/moon button in the top bar switches between light, dark and the system setting (also Settings → Appearance).
+- **Browser alerts**: the bell in the top bar turns on desktop notifications and a chime for alarms while the dashboard is open.
+- The sidebar can be collapsed to icons (the arrows at its bottom); on a phone the main pages are in a tab bar at the bottom.
+
 ## Where data lives
 
 Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
@@ -216,6 +236,9 @@ cd frontend && npm run dev
 
 # checks
 cd frontend && npm run lint && npm run build
+
+# after changing the theme colours in frontend/scripts/gen-theme.cjs
+cd frontend && node scripts/gen-theme.cjs
 ```
 
 The API is documented at <http://localhost:8000/docs> while the server runs.

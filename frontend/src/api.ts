@@ -196,6 +196,8 @@ export interface Recording {
   thumbnail: boolean
   /** Sealed in the evidence vault */
   sealed?: boolean
+  /** Kept forever: skipped by retention and can't be deleted */
+  protected?: boolean
 }
 
 export type IntegrityStatus = 'verified' | 'tampered' | 'unsealed' | 'missing' | 'removed'
@@ -288,12 +290,20 @@ export interface Insights {
   grid_max: number
   hours: number[]
   series: { date: string; incidents: number; alerts: number; sounds: number }[]
-  cameras: { camera: string; incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; offline: number }[]
-  totals: { incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; returning: number; offline: number }
-  last_24h: { incidents: number; alerts: number; sirens: number; sounds: number; night_incidents: number }
+  cameras: { camera: string; incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; offline: number; unattended: number }[]
+  totals: { incidents: number; alerts: number; sirens: number; sounds: number; insiders: number; returning: number; offline: number; unattended: number }
+  last_24h: { incidents: number; alerts: number; sirens: number; sounds: number; unattended: number; night_incidents: number }
   night: { start: number; end: number; last_night: number; baseline: number; ratio: number }
   threat: { score: number; level: 'calm' | 'low' | 'elevated' | 'high'; reasons: string[] }
   findings: { kind: 'info' | 'warning' | 'alert'; text: string }[]
+}
+
+export interface Digest {
+  title: string
+  message: string
+  severity: Severity
+  quiet: boolean
+  generated: string
 }
 
 export interface Heatmap {
@@ -408,6 +418,8 @@ export interface Settings {
     visit_gap_minutes: number
     motion_trails: boolean
     activity_heatmap: boolean
+    unattended_objects: 'off' | 'log' | 'alert'
+    unattended_minutes: number
   }
   escalation: {
     level2_after: number
@@ -453,6 +465,7 @@ export interface Settings {
     /** Channels the saved settings are complete for; the server decides, the same way it does when sending. */
     configured: NotificationChannel[]
   }
+  digest: { enabled: boolean; time: string; skip_quiet: boolean }
 }
 
 export type NotificationChannel = 'discord' | 'telegram' | 'ntfy' | 'webhook' | 'email'
@@ -606,6 +619,11 @@ export const api = {
   sealUnsealed: () => request<{ sealed: number }>('/api/evidence/seal', json('POST')),
   ledgerUrl: '/api/evidence/ledger.jsonl',
   publicKeyUrl: '/api/evidence/public-key.pem',
+
+  digestPreview: () => request<Digest>('/api/digest/preview'),
+  sendDigest: () => request<Digest & { ok: boolean }>('/api/digest/send', json('POST')),
+  protectRecording: (file: string, protect: boolean) =>
+    request<{ protected: boolean }>(`/api/recordings/${encodeURIComponent(file)}/protect`, json('PUT', { protected: protect })),
 
   insights: (days: number) => request<Insights>(`/api/insights?days=${days}`),
   heatmap: (id: string) => request<Heatmap>(`${cam(id)}/heatmap`),
