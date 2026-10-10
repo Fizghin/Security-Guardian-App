@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from services import routine_service as routine_module
 from services.brain_service import UNUSUAL_ALERT_SECONDS, CameraBrain
-from services.routine_service import (HALF_LIFE_DAYS, SAVE_SECONDS, Judgement, Routine, RoutineService, cell,
-                                      hour_words)
+from services.routine_service import (HALF_LIFE_DAYS, SAVE_SECONDS, Judgement, Routine, RoutineService, _quiet_runs,
+                                      cell, hour_words)
 from services.settings_service import SettingsService
 from test_brain import Clock, FakeAI, FakeEvents, FakeNotifier, FakeRecorder, FakeSpeaker, person
 
@@ -179,6 +179,16 @@ def test_report_describes_busy_and_quiet_times():
     assert report["share"][1][17] is None  # never watched
 
 
+def test_quiet_runs_are_the_longest_ones_in_time_order():
+    shares = [0.0] * 24
+    for hour in (7, 17, 18, 19):
+        shares[hour] = 0.5
+    shares[12] = None  # not watched enough: neither quiet nor busy
+    assert _quiet_runs(shares) == [(8, 12), (20, 31)]  # 20:00 to 07:00 the next morning
+    assert _quiet_runs([0.0] * 24) == [(0, 24)]
+    assert _quiet_runs([0.5] * 24) == []
+
+
 def test_hour_words():
     assert [hour_words(h) for h in (0, 3, 12, 15)] == ["midnight", "3 am", "noon", "3 pm"]
 
@@ -260,8 +270,9 @@ def test_unusual_mode_alert_alerts_at_once_and_at_most_every_ten_minutes(brain):
     assert len(brain.notifier.alerts) == 1
     brain.reset()
     brain.clock.t += UNUSUAL_ALERT_SECONDS
-    brain.process([person()])
+    brain.process([person(), person()])
     assert len(brain.notifier.alerts) == 2
+    assert brain.notifier.messages[-1].startswith("2 unrecognised people at Garden at an unusual time")
 
 
 def test_unusual_alert_with_no_channel_is_not_claimed(brain):

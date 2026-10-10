@@ -469,6 +469,40 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
   )
 }
 
+// ---- Learning ---------------------------------------------------------------------------
+function LearningSection({ value, save }: { value: Settings['learning']; save: Save }) {
+  const d = useDraft(value)
+  return (
+    <Section
+      id="learning"
+      title="Learning"
+      description={
+        <>
+          Guardian learns when people are usually in view of each camera. See what it has learned on the{' '}
+          <a href={href('learning')} className="text-blue-400 hover:text-blue-300">
+            Learning
+          </a>{' '}
+          page.
+        </>
+      }
+      dirty={d.dirty}
+      onReset={d.reset}
+      onSave={() => save({ learning: d.changes })}
+    >
+      <Field
+        label="Unusual activity"
+        hint="An unrecognised person at an hour when a camera usually sees nobody, while armed. Judged only after Guardian has watched for 3 days and for 3 hours around that time. The alert comes as soon as they are detected, without waiting for the alert level, at most every 10 minutes per camera."
+      >
+        <select className="input" value={d.draft.unusual_activity} onChange={(e) => d.set('unusual_activity', e.target.value as Settings['learning']['unusual_activity'])}>
+          <option value="off">Ignore</option>
+          <option value="log">Mark it as unusual in the event log</option>
+          <option value="alert">Mark it and alert me straight away</option>
+        </select>
+      </Field>
+    </Section>
+  )
+}
+
 // ---- Escalation ---------------------------------------------------------------------------
 function EscalationSection({ value, save, sirenAvailable }: { value: Settings['escalation']; save: Save; sirenAvailable?: boolean }) {
   const d = useDraft(value)
@@ -853,6 +887,7 @@ const SECTIONS = [
   ['ai', 'Language model'],
   ['voice', 'Voice'],
   ['detection', 'Detection'],
+  ['learning', 'Learning'],
   ['escalation', 'Escalation'],
   ['recording', 'Recording'],
   ['notifications', 'Notifications'],
@@ -910,6 +945,7 @@ export default function SettingsPage({ section }: { section: string }) {
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />
+        <LearningSection key={k(settings.learning)} value={settings.learning} save={save} />
         <EscalationSection key={k(settings.escalation)} value={settings.escalation} save={save} sirenAvailable={status?.siren.available} />
         <RecordingSection key={k(settings.recording)} value={settings.recording} save={save} encoder={sys.data?.recording_encoder} />
         <NotificationsSection key={k(settings.notifications)} value={settings.notifications} save={save} />

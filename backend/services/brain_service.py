@@ -131,7 +131,7 @@ class CameraBrain:
                 if recent and not any(d.face_visible for d in real_unknown) and len(persons) <= len(recent):
                     unknown = [d for d in unknown if d.simulated]
 
-            quiet = None
+            quiet = who = None
             if unknown and cfg.armed:
                 if self.incident_start is None:
                     self._begin_incident(now, simulated=all(d.simulated for d in unknown))
@@ -149,7 +149,7 @@ class CameraBrain:
                 self.last_seen = now  # someone is still there while we work out who they are
             self._update(now)
             if quiet and cfg.learning.unusual_activity == "alert":
-                self._alert_unusual(now, quiet)  # after the first warning, so a prepared line still plays at once
+                self._alert_unusual(now, who, quiet)  # after the first warning, so a prepared line still plays at once
 
     def _returning(self, unknown: List[Detection]) -> List[str]:
         """Notes for remembered visitors not yet mentioned in this incident."""
@@ -175,13 +175,13 @@ class CameraBrain:
         self.unusual = True
         return judgement.quiet_note(self.camera_name())
 
-    def _alert_unusual(self, now: float, quiet: str) -> None:
+    def _alert_unusual(self, now: float, who: str, quiet: str) -> None:
         """Alerts the owner before any escalation, at most every UNUSUAL_ALERT_SECONDS per camera."""
         if self._unusual_alert_time is not None and now - self._unusual_alert_time < UNUSUAL_ALERT_SECONDS:
             return
         self._unusual_alert_time = now
         camera = self.camera_name()
-        msg = f"Unrecognised person at {camera} at an unusual time: {quiet}."
+        msg = f"{who} at {camera} at an unusual time: {quiet}."
         if self._seen_before:
             msg += f" {'; '.join(self._seen_before.values())}."
         title = f"{'[TEST] ' if self.simulated else ''}Unusual activity at {camera}"

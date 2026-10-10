@@ -70,7 +70,7 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
                 ? 'Panic alarm, reset to stand down'
                 : level === 0
                   ? 'Watching for unrecognised people'
-                  : `Level ${level} of 4${camera.test ? ' (test)' : ''}`}
+                  : `Level ${level} of 4${camera.test ? ' (test)' : ''}${camera.routine?.unusual_now ? ' · unusual time' : ''}`}
           </div>
         </div>
       </div>

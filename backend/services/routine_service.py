@@ -223,9 +223,10 @@ class Routine:
             busy = _busiest(shares)
             if busy:
                 lines.append(f"Busiest: {label} {_span(*busy)}")
-            quiet = _quietest(shares)
+            quiet = _quiet_runs(shares)
             if quiet:
-                lines.append(f"Usually quiet: {label} {'all day' if quiet[1] - quiet[0] >= 24 else _span(*quiet)}")
+                spans = "all day" if quiet == [(0, 24)] else ", ".join(_span(*run) for run in quiet)
+                lines.append(f"Usually quiet: {label} {spans}")
         return lines
 
     # ---- storage ---------------------------------------------------------------
@@ -284,20 +285,21 @@ def _busiest(shares: list[float | None], longest: int = 6) -> tuple[int, int] | 
     return start, end
 
 
-def _quietest(shares: list[float | None], shortest: int = 2) -> tuple[int, int] | None:
-    """The longest run of usually quiet hours, which may run past midnight; None if under `shortest`."""
+def _quiet_runs(shares: list[float | None], shortest: int = 3, most: int = 2) -> list[tuple[int, int]]:
+    """The longest runs of usually quiet hours, in time order. A run may go past midnight."""
     quiet = [s is not None and s < UNUSUAL_SHARE for s in shares]
     if all(quiet):
-        return 0, 24
-    best, run_start = (0, 0), None
-    for i in range(48):  # twice round the clock, so a run past midnight is found whole
-        if quiet[i % 24]:
-            run_start = i if run_start is None else run_start
-            if i - run_start + 1 > best[1] - best[0]:
-                best = (run_start, i + 1)
-        else:
-            run_start = None
-    return best if best[1] - best[0] >= shortest else None
+        return [(0, 24)]
+    first = quiet.index(False)  # start where it isn't quiet, so a run past midnight is found whole
+    runs, start = [], None
+    for i in range(first, first + 25):
+        if i < first + 24 and quiet[i % 24]:
+            start = i if start is None else start
+        elif start is not None:
+            runs.append((start % 24, start % 24 + i - start))
+            start = None
+    longest = sorted((r for r in runs if r[1] - r[0] >= shortest), key=lambda r: r[0] - r[1])[:most]
+    return sorted(longest)
 
 
 class RoutineService:

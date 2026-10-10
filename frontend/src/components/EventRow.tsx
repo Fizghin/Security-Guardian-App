@@ -5,6 +5,11 @@ import { cx } from '../lib/cx'
 import { useStatus } from '../lib/status'
 import { Badge, Button, Modal } from './ui'
 
+/** A detection at an hour when the camera usually sees nobody; the server words it so. */
+const isUnusual = (event: SecurityEvent) => event.event_type === 'DETECTION' && event.description.includes('. Unusual: ')
+
+const UNUSUAL = 'bg-fuchsia-500/10 text-fuchsia-300 ring-fuchsia-500/30'
+
 /** A clip that is still being recorded can only be played once it is saved. */
 function useStillRecording(file: string | null) {
   const { status } = useStatus()
@@ -23,6 +28,7 @@ export default function EventRow({
   compact?: boolean
 }) {
   const stillRecording = useStillRecording(event.recording)
+  const unusual = isUnusual(event) && <Badge className={UNUSUAL}>Unusual</Badge>
   const time = (
     <time
       className="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-zinc-500"
@@ -69,6 +75,7 @@ export default function EventRow({
           <div className="flex items-center gap-2">
             {time}
             <Badge className={SEVERITY_STYLE[event.severity]}>{eventLabel(event.event_type)}</Badge>
+            {unusual}
             {event.camera && <span className="truncate text-[11px] text-zinc-500">{event.camera}</span>}
           </div>
           <div className="mt-1 flex items-start gap-2">
@@ -86,6 +93,7 @@ export default function EventRow({
       <div className="flex shrink-0 items-baseline gap-3 sm:w-80">
         <span className="sm:w-[6.5rem]">{time}</span>
         <Badge className={SEVERITY_STYLE[event.severity]}>{eventLabel(event.event_type)}</Badge>
+        {unusual}
         {event.camera && <span className="truncate text-xs text-zinc-500">{event.camera}</span>}
       </div>
       <p className="min-w-0 flex-1 text-zinc-300">{event.description}</p>

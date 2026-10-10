@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
-export type Page = 'live' | 'events' | 'recordings' | 'insiders' | 'visitors' | 'settings'
-const PAGES: Page[] = ['live', 'events', 'recordings', 'insiders', 'visitors', 'settings']
+export type Page = 'live' | 'events' | 'recordings' | 'insiders' | 'visitors' | 'learning' | 'settings'
+const PAGES: Page[] = ['live', 'events', 'recordings', 'insiders', 'visitors', 'learning', 'settings']
 
 export const PAGE_TITLES: Record<Page, string> = {
   live: 'Live',
@@ -9,6 +9,7 @@ export const PAGE_TITLES: Record<Page, string> = {
   recordings: 'Recordings',
   insiders: 'Insiders',
   visitors: 'Visitors',
+  learning: 'Learning',
   settings: 'Settings',
 }
 
