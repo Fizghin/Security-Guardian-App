@@ -7,6 +7,7 @@ Each enabled camera runs as a CameraUnit with its own background loop:
         -> remembered visitors -> CameraBrain (escalation) -> annotated frame (live view + recorder)
 
 A phone camera's microphone levels go to its SoundMonitor (loud-sound alerts).
+Every check for people also feeds the camera's learned routine (when people are usually there).
 
 The CameraManager creates and removes units as settings change, and handles
 what applies to the whole system: arming, the panic button, resetting, the
@@ -33,6 +34,7 @@ from services.face_service import face_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
+from services.routine_service import routine_service
 from services.schedule_service import AppliedEvent, last_event, next_change
 from services.settings_service import CameraConfig, Settings, settings_service
 from services.siren_service import siren_service
@@ -95,7 +97,7 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
 class CameraUnit:
     def __init__(self, cfg: CameraConfig, settings=settings_service, detector=detection_service, faces=face_service,
                  notifier=notification_service, events=event_service, hub=phone_hub, audio=audio_hub,
-                 visitors=visitor_service):
+                 visitors=visitor_service, routines=routine_service):
         self.id = cfg.id
         self.settings, self.detector, self.faces, self.visitors = settings, detector, faces, visitors
         self.notifier, self.events, self.hub = notifier, events, hub
@@ -109,6 +111,9 @@ class CameraUnit:
         self.brain = CameraBrain(cfg.id, self.name, self.speaker, self.recorder, settings=settings,
                                  notifier=notifier, events=events, prune=lambda days: prune_media(days, events))
         self.brain.snapshot = self.snapshot
+        self.routines = routines
+        self.routine = routines.get(cfg.id)
+        self.brain.routine = self.routine.judge
         self.sound = SoundMonitor(self.name, self.recorder, settings=settings, notifier=notifier, events=events)
         self.sound.snapshot = self.snapshot
         self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
@@ -170,6 +175,7 @@ class CameraUnit:
         self.brain.reset("Camera stopped")
         self.recorder.shutdown()
         self.source.stop()
+        self.routines.save(self.id, time.time())
 
     def simulate(self, seconds: float) -> None:
         self.simulate_until = time.time() + seconds
@@ -242,6 +248,7 @@ class CameraUnit:
             if now - last_health >= 1.0:
                 self._check_health(now)
                 self._check_zones()
+                self.routine.tick(now)
                 last_health = now
 
             frame, frame_id, _ = self.source.get_frame()
@@ -314,6 +321,9 @@ class CameraUnit:
         if remember:
             self.visitors.record(self.id, self.name(), detections, now, self.brain.picture_event)
         self.error = self.detector.error
+        if not self.error:  # a minute only counts as watched if people could have been seen
+            real = [d for d in detections if not d.simulated]
+            self.routine.saw(now, people=bool(real), strangers=any(d.status == "unknown" for d in real))
 
     def _check_health(self, now: float) -> None:
         """Camera unplugged, covered phone, lost Wi-Fi: log it and alert while armed."""
@@ -369,6 +379,7 @@ class CameraUnit:
             **self.brain.status(),
             "recording": self.recorder.status(),
             "zones_mismatch": self.zones_mismatch(),
+            "routine": {**self.routine.status(time.time()), "unusual_now": self.brain.unusual},
         }
 
 
@@ -429,6 +440,9 @@ class CameraManager:
                 unit.recorder.configure(rec.preroll_seconds, rec.postroll_seconds, rec.max_clip_seconds)
             for cam_id in [c.id for c in new.cameras if not c.enabled]:
                 self.hub.unregister(cam_id)
+            for cam in old.cameras if old else []:
+                if new.camera(cam.id) is None:  # deleted: what it learned goes with it
+                    routine_service.forget(cam.id)
 
     def get(self, camera_id: str) -> CameraUnit:
         unit = self.units.get(camera_id)
@@ -585,6 +599,7 @@ class CameraManager:
             try:
                 self.check_schedule()
                 self.prune_old_media()
+                routine_service.flush(time.time())
                 visitor_service.expire(time.time())  # people who left while no camera checked for visitors
                 if self.settings.get().armed:
                     self.ai.keep_warm()

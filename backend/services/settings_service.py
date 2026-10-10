@@ -159,6 +159,12 @@ class ScheduleSettings(BaseModel):
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
 
 
+class LearningSettings(BaseModel):
+    # Strangers at a time a camera is usually quiet: "log" words the detection as unusual, "alert"
+    # also alerts the owner straight away while armed.
+    unusual_activity: Literal["off", "log", "alert"] = "alert"
+
+
 CHANNELS = ("discord", "telegram", "ntfy", "webhook", "email")
 # Address fields and the schemes they accept. Discord only ever hands out https:// webhooks.
 URL_FIELDS = {"discord_webhook": ("https",), "ntfy_url": ("https", "http"), "webhook_url": ("https", "http")}
@@ -227,6 +233,7 @@ class Settings(BaseModel):
     ai: AISettings = AISettings()
     phone: PhoneSettings = PhoneSettings()
     schedule: ScheduleSettings = ScheduleSettings()
+    learning: LearningSettings = LearningSettings()
     notifications: NotificationSettings = NotificationSettings()
 
     @field_validator("cameras")

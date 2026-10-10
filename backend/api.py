@@ -23,6 +23,7 @@ from services.face_service import FaceError, face_service
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
+from services.routine_service import routine_service
 from services.schedule_service import time_zone
 from services.settings_service import PHONE_SOURCE, NotificationSettings, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
@@ -276,6 +277,30 @@ async def faces_on_camera(camera_id: str):
     except FaceError as exc:
         raise HTTPException(409, str(exc))
     return {"faces": faces}
+
+
+# ---- learned routine ------------------------------------------------------------------
+def _camera_config(camera_id: str):
+    cam = settings_service.get().camera(camera_id)
+    if cam is None:
+        raise HTTPException(404, "Camera not found")
+    return cam
+
+
+@router.get("/cameras/{camera_id}/routine")
+def camera_routine(camera_id: str):
+    """When people are usually in view of this camera, as learned so far."""
+    cam = _camera_config(camera_id)
+    report = routine_service.get(cam.id).report(time.time())
+    return {"camera_id": cam.id, "name": cam.name, "mode": settings_service.get().learning.unusual_activity, **report}
+
+
+@router.delete("/cameras/{camera_id}/routine")
+def reset_camera_routine(camera_id: str):
+    cam = _camera_config(camera_id)
+    routine_service.reset(cam.id)
+    event_service.log("SYSTEM", "Learned routine reset: learning starts again", camera=cam.name)
+    return {"ok": True}
 
 
 async def _until_closed(websocket: WebSocket) -> None:

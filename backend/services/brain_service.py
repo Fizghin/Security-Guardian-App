@@ -10,6 +10,8 @@ Threat escalation for one camera.
 People the tracker is still identifying ("pending") do not start an incident,
 so a resident walking up to the camera is recognised before anything is said.
 Strangers who are remembered visitors are noted in the log and in the alert.
+A stranger at a time the camera is usually quiet (its learned routine) is noted
+as unusual, and the owner can be alerted about it straight away.
 An incident ends when nobody unrecognised has been seen for clear_after
 seconds, when the system is disarmed, or when the alarm is reset. A panic is
 driven by the CameraManager and stays at level 4 until it is reset.
@@ -23,6 +25,7 @@ from models.domain import Detection
 from services.ai_service import WarningContext, ai_service
 from services.event_service import event_service
 from services.notification_service import notification_service
+from services.routine_service import Judgement
 from services.settings_service import settings_service
 
 LEVEL_NAMES = {0: "Clear", 1: "Person detected", 2: "Loitering", 3: "Intruder", 4: "Alarm"}
@@ -32,6 +35,7 @@ PICTURE_EVENTS = {"INSIDER", "DETECTION", "ESCALATION", "ALERT", "VISITOR"}
 ALERT_REPEAT_SECONDS = 120
 INSIDER_LOG_SECONDS = 300
 PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
+UNUSUAL_ALERT_SECONDS = 600  # alerts about strangers at unusual times, per camera
 
 
 def voice_cooldown(persistence: int) -> float:
@@ -48,6 +52,7 @@ class CameraBrain:
         self.settings, self.ai, self.notifier, self.events = settings, ai, notifier, events
         self.prune, self.clock = prune, clock
         self.snapshot: Callable[[], bytes | None] = lambda: None
+        self.routine: Callable[[float], Judgement | None] = lambda now: None  # the camera's learned routine
         self._lock = threading.RLock()
 
         self.threat_level = 0
@@ -65,6 +70,8 @@ class CameraBrain:
         self.said: List[str] = []
         self.picture_event: int | None = None  # the incident's latest event with a picture
         self._seen_before: dict[int, str] = {}  # visitor id -> "seen before" note, this incident
+        self.unusual = False  # this incident started at a time the camera is usually quiet
+        self._unusual_alert_time: float | None = None
 
         self.persons = 0
         self.pending = 0
@@ -124,13 +131,16 @@ class CameraBrain:
                 if recent and not any(d.face_visible for d in real_unknown) and len(persons) <= len(recent):
                     unknown = [d for d in unknown if d.simulated]
 
+            quiet = None
             if unknown and cfg.armed:
                 if self.incident_start is None:
                     self._begin_incident(now, simulated=all(d.simulated for d in unknown))
                     who = "Unrecognised person" if len(unknown) == 1 else f"{len(unknown)} unrecognised people"
                     seen = self._returning(unknown)
+                    quiet = self._unusual_time(now, cfg.learning.unusual_activity)
                     self._log_level("DETECTION", f"{who} detected" + (" (test)" if self.simulated else "")
-                                    + (f" ({'; '.join(seen)})" if seen else ""), "LOW")
+                                    + (f" ({'; '.join(seen)})" if seen else "")
+                                    + (f". Unusual: {quiet}." if quiet else ""), "MEDIUM" if quiet else "LOW")
                 elif seen := self._returning(unknown):
                     # Recognised after the incident started, e.g. once they faced the camera
                     self._log("VISITOR", f"Returning visitor: {'; '.join(seen)}", "LOW")
@@ -138,6 +148,8 @@ class CameraBrain:
             elif pending and self.incident_start is not None:
                 self.last_seen = now  # someone is still there while we work out who they are
             self._update(now)
+            if quiet and cfg.learning.unusual_activity == "alert":
+                self._alert_unusual(now, quiet)  # after the first warning, so a prepared line still plays at once
 
     def _returning(self, unknown: List[Detection]) -> List[str]:
         """Notes for remembered visitors not yet mentioned in this incident."""
@@ -147,6 +159,37 @@ class CameraBrain:
                 self._seen_before[d.visitor_id] = d.seen_before
                 notes.append(d.seen_before)
         return notes
+
+    def _unusual_time(self, now: float, mode: str) -> str | None:
+        """Why a new incident is unusual ("Garden is usually quiet on Tuesdays around 3 am"), or None
+        while the routine is still being learned or people are usually there at this time."""
+        if mode == "off":
+            return None
+        try:
+            judgement = self.routine(now)
+        except Exception as exc:  # the incident goes on without it
+            print(f"[brain] Routine check failed: {exc}")
+            return None
+        if judgement is None or not judgement.unusual:
+            return None
+        self.unusual = True
+        return judgement.quiet_note(self.camera_name())
+
+    def _alert_unusual(self, now: float, quiet: str) -> None:
+        """Alerts the owner before any escalation, at most every UNUSUAL_ALERT_SECONDS per camera."""
+        if self._unusual_alert_time is not None and now - self._unusual_alert_time < UNUSUAL_ALERT_SECONDS:
+            return
+        self._unusual_alert_time = now
+        camera = self.camera_name()
+        msg = f"Unrecognised person at {camera} at an unusual time: {quiet}."
+        if self._seen_before:
+            msg += f" {'; '.join(self._seen_before.values())}."
+        title = f"{'[TEST] ' if self.simulated else ''}Unusual activity at {camera}"
+        if self.notifier.send_alert(title, msg, "MEDIUM", self.snapshot()):
+            self._alerted = True
+            self._log("ALERT", f"Owner alerted: {msg}", "MEDIUM")
+        else:
+            print(f"[brain] {camera}: unusual activity alert not sent, no alert channel is set up")
 
     def tick(self, now: float | None = None) -> None:
         with self._lock:
@@ -183,6 +226,7 @@ class CameraBrain:
         self.last_alert_time = 0.0
         self.picture_event = None
         self._seen_before = {}
+        self.unusual = False
 
     def _update(self, now: float) -> None:
         if self.incident_start is None:
@@ -304,6 +348,7 @@ class CameraBrain:
         self.said = []
         self.picture_event = None
         self._seen_before = {}
+        self.unusual = False
         if self._siren_fired:
             self.speaker.siren(False)
         self._siren_fired = False
