@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Film, Play } from 'lucide-react'
 import { api, type Recording } from '../api'
+import { SealBadge } from '../components/ClipSeal'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Badge, Card, Empty, ErrorNote } from '../components/ui'
 import { formatBytes, formatDateTime, formatDuration, LEVELS, reasonLabel } from '../lib/format'
@@ -104,6 +105,7 @@ export default function RecordingsPage() {
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <Badge>{reasonLabel(rec.reason)}</Badge>
                   {rec.max_level ? <Badge className={LEVELS[rec.max_level].soft}>Level {rec.max_level}</Badge> : null}
+                  <SealBadge rec={rec} />
                 </div>
               </div>
             </button>

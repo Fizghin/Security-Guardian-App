@@ -207,8 +207,8 @@ export default function IncidentPage({ id }: { id: string }) {
         <ol className="divide-y divide-zinc-800">
           {report.timeline.map((t) => (
             <li key={t.event_id} className="flex flex-col gap-1 px-4 py-2 text-sm sm:flex-row sm:items-start sm:gap-3">
-              <div className="flex shrink-0 items-center gap-2 sm:w-44">
-                <time className="w-[4.5rem] font-mono text-xs tabular-nums text-zinc-500" dateTime={t.time}>
+              <div className="flex shrink-0 items-center gap-2 sm:w-52">
+                <time className="w-[5.75rem] whitespace-nowrap font-mono text-xs tabular-nums text-zinc-500" dateTime={t.time}>
                   {formatTime(t.time)}
                 </time>
                 <Badge className={SEVERITY_STYLE[t.severity]}>{eventLabel(t.type)}</Badge>

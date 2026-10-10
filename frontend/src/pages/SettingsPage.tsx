@@ -3,6 +3,7 @@ import { Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
 import { api, type AITestResult, type NotificationChannel, type NotificationResult, type ScheduleRule, type Settings, type SettingsPatch, type Status } from '../api'
 import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
+import VaultPanel from '../components/VaultPanel'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
 import { href } from '../lib/route'
@@ -842,6 +843,7 @@ function SystemSection() {
       <p className="hint">
         Data folder: <span className="font-mono">{s.data_dir}</span>
       </p>
+      <VaultPanel />
     </Section>
   )
 }
