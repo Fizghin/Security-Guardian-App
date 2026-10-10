@@ -469,6 +469,42 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
   )
 }
 
+// ---- Learning --------------------------------------------------------------------------------
+function LearningSection({ value, save }: { value: Settings['learning']; save: Save }) {
+  const d = useDraft(value)
+  return (
+    <Section
+      id="learning"
+      title="Learning"
+      description={
+        <>
+          See and undo what Guardian has learned on the{' '}
+          <a href={href('learning')} className="text-blue-400 hover:text-blue-300">
+            Learning page
+          </a>
+          .
+        </>
+      }
+      dirty={d.dirty}
+      onReset={d.reset}
+      onSave={() => save({ learning: d.changes })}
+    >
+      <Toggle
+        checked={d.draft.learn_from_feedback}
+        onChange={(v) => d.set('learn_from_feedback', v)}
+        label="Learn from my feedback"
+        description="“False alarm” on a detection teaches Guardian to ignore that spot while nothing moves there. A person who moves or shows their face is still detected. When off, your answers are kept but change nothing."
+      />
+      <Toggle
+        checked={d.draft.improve_faces}
+        onChange={(v) => d.set('improve_faces', v)}
+        label="Improve insider recognition by itself"
+        description="When an insider is recognised clearly, Guardian keeps a new look at their face (another angle or light): at most one every 10 minutes and 12 per person. They are marked “Learned” on the Insiders page, where you can remove them."
+      />
+    </Section>
+  )
+}
+
 // ---- Escalation ---------------------------------------------------------------------------
 function EscalationSection({ value, save, sirenAvailable }: { value: Settings['escalation']; save: Save; sirenAvailable?: boolean }) {
   const d = useDraft(value)
@@ -853,6 +889,7 @@ const SECTIONS = [
   ['ai', 'Language model'],
   ['voice', 'Voice'],
   ['detection', 'Detection'],
+  ['learning', 'Learning'],
   ['escalation', 'Escalation'],
   ['recording', 'Recording'],
   ['notifications', 'Notifications'],
@@ -910,6 +947,7 @@ export default function SettingsPage({ section }: { section: string }) {
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />
+        <LearningSection key={k(settings.learning)} value={settings.learning} save={save} />
         <EscalationSection key={k(settings.escalation)} value={settings.escalation} save={save} sirenAvailable={status?.siren.available} />
         <RecordingSection key={k(settings.recording)} value={settings.recording} save={save} encoder={sys.data?.recording_encoder} />
         <NotificationsSection key={k(settings.notifications)} value={settings.notifications} save={save} />

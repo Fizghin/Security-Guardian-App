@@ -3,6 +3,7 @@ import { api, type SecurityEvent } from '../api'
 import { eventLabel, formatDateTime, formatShortDate, formatTime, isToday, SEVERITY_STYLE } from '../lib/format'
 import { cx } from '../lib/cx'
 import { useStatus } from '../lib/status'
+import EventFeedback from './EventFeedback'
 import { Badge, Button, Modal } from './ui'
 
 /** A clip that is still being recorded can only be played once it is saved. */
@@ -75,6 +76,7 @@ export default function EventRow({
             <p className="line-clamp-2 min-w-0 flex-1 text-zinc-300">{event.description}</p>
             {clip}
           </div>
+          <EventFeedback event={event} className="-ml-2 mt-1" />
         </div>
         {picture}
       </li>
@@ -90,6 +92,7 @@ export default function EventRow({
       </div>
       <p className="min-w-0 flex-1 text-zinc-300">{event.description}</p>
       <div className="flex items-center gap-2 empty:hidden">
+        <EventFeedback event={event} className="-ml-2 sm:ml-0" />
         {clip}
         {picture}
       </div>
@@ -139,6 +142,7 @@ export function EventPicture({
     >
       <img src={api.eventSnapshotUrl(event)} alt={event.description} className="mx-auto max-h-[70vh] w-auto rounded" />
       <p className="mt-3 text-sm text-zinc-300">{event.description}</p>
+      <EventFeedback event={event} className="-ml-2 mt-2" />
     </Modal>
   )
 }

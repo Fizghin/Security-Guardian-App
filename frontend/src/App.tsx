@@ -6,6 +6,7 @@ import { PAGE_TITLES, useRoute } from './lib/route'
 import { StatusContext } from './lib/status'
 import { usePoll } from './lib/usePoll'
 import InsidersPage from './pages/InsidersPage'
+import LearningPage from './pages/LearningPage'
 import LivePage from './pages/LivePage'
 import RecordingsPage from './pages/RecordingsPage'
 import SettingsPage from './pages/SettingsPage'
@@ -37,6 +38,7 @@ export default function App() {
           {page === 'recordings' && <RecordingsPage />}
           {page === 'insiders' && <InsidersPage />}
           {page === 'visitors' && <VisitorsPage />}
+          {page === 'learning' && <LearningPage />}
           {page === 'settings' && <SettingsPage section={section} />}
         </Shell>
       </StatusContext.Provider>

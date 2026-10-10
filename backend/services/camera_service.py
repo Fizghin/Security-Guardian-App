@@ -30,6 +30,7 @@ from services.brain_service import CameraBrain
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import face_service
+from services.learning_service import event_details, learning_service
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
 from services.recording_service import Recorder, recording_library
@@ -53,6 +54,7 @@ BOX_HOLD_SECONDS = 1.5
 PRUNE_SECONDS = 3600  # old recordings and event pictures are deleted at least this often
 
 RED, GREEN, AMBER, GREY, BLUE = (40, 40, 220), (90, 180, 60), (0, 170, 240), (150, 150, 150), (230, 160, 60)
+DIM = (170, 170, 170)  # still things ignored on a learned spot
 ZONE = (230, 230, 160)  # detection zone outlines, light cyan
 
 
@@ -66,6 +68,14 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
         cv2.polylines(frame, [points], True, ZONE, thick, cv2.LINE_AA)
     for d in detections:
         x1, y1, x2, y2 = (int(v) for v in d.bbox)
+        if d.ignored:  # thin and dim, so the owner can see a learned spot at work
+            cv2.rectangle(frame, (x1, y1), (x2, y2), DIM, max(1, thick // 2))
+            (tw, th), base = cv2.getTextSize("ignored", cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, 1)
+            pad = int(3 * scale)
+            cv2.rectangle(frame, (x1 + 1, y1 + 1), (x1 + tw + 2 * pad, y1 + th + base + 2 * pad), (0, 0, 0), -1)
+            cv2.putText(frame, "ignored", (x1 + pad, y1 + th + pad), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale, DIM, 1,
+                        cv2.LINE_AA)
+            continue
         if d.simulated:
             color, label = AMBER, "TEST"
         elif d.status == "known":
@@ -95,9 +105,10 @@ def draw_overlay(frame, detections: list[Detection], camera_name: str, armed: bo
 class CameraUnit:
     def __init__(self, cfg: CameraConfig, settings=settings_service, detector=detection_service, faces=face_service,
                  notifier=notification_service, events=event_service, hub=phone_hub, audio=audio_hub,
-                 visitors=visitor_service):
+                 visitors=visitor_service, learning=learning_service):
         self.id = cfg.id
         self.settings, self.detector, self.faces, self.visitors = settings, detector, faces, visitors
+        self.learning = learning
         self.notifier, self.events, self.hub = notifier, events, hub
         self._cfg = cfg
         self.source = self._make_source(cfg)
@@ -109,6 +120,7 @@ class CameraUnit:
         self.brain = CameraBrain(cfg.id, self.name, self.speaker, self.recorder, settings=settings,
                                  notifier=notifier, events=events, prune=lambda days: prune_media(days, events))
         self.brain.snapshot = self.snapshot
+        self.brain.details = self.details
         self.sound = SoundMonitor(self.name, self.recorder, settings=settings, notifier=notifier, events=events)
         self.sound.snapshot = self.snapshot
         self.sound.own_sound = lambda: self.audio.talked_recently() or self.speaker.sounding
@@ -124,6 +136,7 @@ class CameraUnit:
         self._judging: list | None = None  # [frame, detections, jpeg] while the brain judges that frame
         self._detections: list[Detection] = []
         self._detections_time = 0.0
+        self._judged: tuple[int, int, list[Detection]] | None = None  # picture size and the people the brain saw
         self.simulate_until = 0.0
         self.fps = 0.0
         self.motion = False
@@ -198,6 +211,11 @@ class CameraUnit:
             judging[2] = self._encode(draw_overlay(frame.copy(), detections, self.name(), self.settings.get().armed,
                                                    self.cfg.zones))
         return judging[2]
+
+    def details(self) -> dict | None:
+        """Who is in the picture that goes with an event: the people the brain judged last."""
+        judged = self._judged
+        return event_details(self.id, *judged) if judged else None
 
     def raw_snapshot(self) -> bytes | None:
         raw = self.latest_raw()
@@ -294,8 +312,9 @@ class CameraUnit:
         # Newcomers are then checked against remembered visitors as against insiders.
         remember = det.face_recognition and det.remember_visitors and cfg.armed and self.faces.ready
         recognition = det.face_recognition and (self.faces.active or remember)
+        learn_faces = det.face_recognition and cfg.learning.improve_faces and self.faces.active
         look = recognition and (self.faces.active or self.visitors.wants_look(self.id, detections, now))
-        evidence = self.faces.analyze(frame, detections, det.face_match_threshold, keep_faces=remember) \
+        evidence = self.faces.analyze(frame, detections, det.face_match_threshold, keep_faces=remember or learn_faces) \
             if look else [FaceEvidence() for _ in detections]
         if simulating:
             h, w = frame.shape[:2]
@@ -303,12 +322,19 @@ class CameraUnit:
                                         bbox=[w * 0.35, h * 0.2, w * 0.65, h * 0.95]))
             evidence.append(FaceEvidence())
         self.tracker.update(detections, evidence, now, det.face_match_threshold, det.identify_seconds, recognition)
+        # Still things on a spot the owner taught Guardian to ignore are drawn, but the brain never sees them.
+        self.learning.judge(self.id, self.name(), frame, detections, self.tracker.tracks, now)
+        if learn_faces:
+            self.learning.offer_faces(self.id, self.name(), detections, evidence, self.tracker.tracks,
+                                      det.face_match_threshold, now)
         if remember:
             self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
+        watched = [d for d in detections if not d.ignored]
         self._judging = [frame, detections, None]
+        self._judged = (frame.shape[1], frame.shape[0], watched)
         try:
-            self.brain.process(detections, now)
+            self.brain.process(watched, now)
         finally:
             self._judging = None
         if remember:
@@ -367,6 +393,7 @@ class CameraUnit:
             "pipeline": {"fps": self.fps if src["connected"] else 0.0, "motion": self.motion,
                          "test_seconds_left": max(0, int(self.simulate_until - time.time())), "error": self.error},
             **self.brain.status(),
+            "ignored": sum(1 for d in self._detections if d.ignored),  # still things on a learned spot
             "recording": self.recorder.status(),
             "zones_mismatch": self.zones_mismatch(),
         }

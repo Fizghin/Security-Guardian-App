@@ -10,6 +10,7 @@ A home/office CCTV system that runs entirely on your own computer. It watches we
 - **Person detection** with YOLOv8 (runs on the CPU; uses an NVIDIA GPU automatically if PyTorch has CUDA).
 - **Insider recognition**: add photos (or take them straight from a camera) of household members or staff; recognised people never trigger alarms and can be greeted by name.
 - **Repeat visitors**: Guardian remembers strangers' faces and tells you when someone comes back ("seen before: 3 visits, last Tue 23:10"). Name them, or turn them into insiders in one click.
+- **Learns from you**: mark a detection *False alarm* and Guardian ignores that still thing in that spot, while anyone who moves or shows their face is still detected. It also suggests spots for things that never move and keeps new looks at insiders' faces to recognise them better. Everything it learned can be seen and undone on the Learning page.
 - **Escalation** in four levels with configurable timings: greeting, warning, owner alert, siren.
 - **Spoken warnings written by a local LLM** (Ollama, LM Studio, llama.cpp…), shaped by adjustable intimidation, humour and persistence. Replies are checked against what is actually happening, and the first warning of each level is prepared in advance so it plays instantly.
 - **Recording** of every incident as H.264 MP4, including the seconds *before* the trigger, with automatic clean-up.
@@ -172,6 +173,26 @@ How it works: each tracked stranger keeps the best look at their face (sharp, la
 
 **Privacy.** Turning this on means Guardian keeps photos of the faces of everyone it doesn't recognise while armed, including neighbours, delivery people and passers-by your cameras can see. Only people standing in a camera's detection zones count. Everything stays on this computer, in `backend/storage/visitors/` and the event database; nothing is uploaded. Visitors are forgotten 90 days after they were last seen (*Forget visitors after*, 0 keeps them until you forget them), and nothing is remembered while disarmed. Check the rules where you live before recording people outside your own property, and turn it off with **Remember strangers' faces** (Settings → Detection) if you don't need it. Turning it off keeps the visitors already remembered until they expire or you forget them.
 
+## Learning
+
+Guardian learns from your answers, and gets better at recognising the people who live here by itself. The **Learning** page shows everything it learned and lets you undo it.
+
+**Your answers.** Detections, escalations and alerts in the event log, in Recent activity on the Live page and in the picture view have two small buttons, **Correct** and **False alarm**; an event that recognised an insider has **Not *name***. The answer you chose stays highlighted. Choose it again to clear it, which also undoes what it taught; choosing the other answer undoes the old lesson first. A message says what Guardian learned, e.g. *Got it. Guardian will ignore that spot on Garden while nothing moves there.* For this, each of these events keeps who was in its picture: each person's box, confidence, whether they were recognised and how well, and whether a face was visible (a few hundred bytes).
+
+- **False alarm** teaches an *ignored spot* for each unrecognised person in the picture, for example a coat on a door or a statue that looks like a person. Another false alarm in the same place (boxes overlapping by half or more) strengthens that spot instead of adding one.
+- **Correct** removes the spots the event's people overlap: someone really was there.
+- **Not Alice** removes the photos of Alice that Guardian learned from that sighting (on that camera, within 5 minutes of the event or from the same tracked person) and stops it learning from that person while they stay in view.
+
+**How a spot is ignored.** Something on a spot is ignored only while all of these hold: its box overlaps the spot by half or more, it has not moved more than 3% of the picture or changed size since Guardian started following it, and no face has been seen on it. Someone who walks into the spot moves or shows their face, so they are always detected, and something ignored that moves or shows a face counts again at once. Recognised insiders and test intrusions are never ignored, and nothing is learned from test intrusions. Ignored things are drawn as a thin grey box labelled *ignored* on the live picture, and the camera card says how many there are instead of counting them as people.
+
+**Suggestions.** When an unrecognised "person" stays completely still with no face for 10 minutes, Guardian logs it with a picture (*Something on Garden has not moved for 10 minutes and shows no face. If it is an object, confirm it on the Learning page.*) and suggests it as a spot. Nothing is ignored until you **Confirm** it. **Dismiss**, like removing a spot, stops that place being suggested again for a day, and each place is suggested only once.
+
+**Faces that improve themselves.** When Guardian recognises an insider clearly, it can keep that look at their face as an extra photo, so they are recognised better from other angles and in other light. It does so only when the person was confirmed from several matching looks with no vote for anyone else, that very face matched well (0.08 above *Face match strictness*) and passed the quality checks, and it looks different enough from their photos so far. At most one photo is learned per person every 10 minutes and at most 12 are kept: the oldest learned one makes way for a new one, and your own photos are never replaced. Saving them happens in the background. Learned photos are marked *Learned* on the Insiders page, where you can remove them, and each one is logged (*Learned a new photo of Alice from Garden*).
+
+**The Learning page** shows each camera's ignored spots drawn on its picture (how often each was taught, when it last ignored something, **Remove**), suggestions waiting for an answer, the photos learned for each insider, how you answered on each camera over the last 30 days, and **Forget what was learned on a camera** (its spots, its suggestions and the face photos learned from it).
+
+**Settings → Learning** has *Learn from my feedback* (on by default; when off, your answers are kept but teach nothing) and *Improve insider recognition by itself* (on by default). Removing a camera also removes its spots and suggestions. Clearing the event log keeps what was learned, but answers on the deleted events can no longer be undone.
+
 ## Alerts
 
 Settings → **Notifications** sends alerts with a picture when someone reaches the alert level (level 3 by default), followed by the clip once it is saved. Use any combination:
@@ -190,7 +211,7 @@ Tokens, passwords and webhook addresses are stored in `backend/storage/settings.
 
 ## Where data lives
 
-Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
+Everything Guardian writes is in `backend/storage/`: `guardian.db` (event log), `recordings/`, `faces/` (insider photos; the ones Guardian learned itself start with `learned-` and have a `.json` saying where and when), `snapshots/` (event pictures, deleted after the same number of days as recordings; checked every hour), `visitors/` (face photos of remembered visitors, one folder each, deleted with the visitor; the database keeps their sightings), `learning/` (`spots.json`: ignored spots, suggestions and dismissed places; `set_aside/`: learned photos removed with *Not name*, kept until that answer is cleared or the event log is cleared), `models/`, `settings.json` (changes made in the dashboard, which take priority over `.env`) and `schedule_state.json` (the schedule's last start or end that Guardian acted on). Delete the folder to start fresh. Data from earlier versions (`sql_app.db`, `faces_db/`) is migrated automatically on first start.
 
 ## Development
 

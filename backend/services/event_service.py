@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import threading
 import time
 from collections import Counter
@@ -30,8 +31,9 @@ class EventService:
         self.snapshot_dir = snapshot_dir
 
     def log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
-            camera: str | None = None, snapshot: bytes | None = None) -> int | None:
-        """snapshot: a JPEG of the moment, shown with the event in the dashboard. Returns the event's id."""
+            camera: str | None = None, snapshot: bytes | None = None, details: dict | None = None) -> int | None:
+        """snapshot: a JPEG of the moment, shown with the event in the dashboard. details: what was seen in
+        it, for learning from the owner's feedback. Returns the event's id."""
         severity = severity.upper() if severity.upper() in SEVERITIES else "INFO"
         print(f"[event] {severity:<8} {event_type}{f' [{camera}]' if camera else ''}: {description}")
         now = utcnow()
@@ -47,6 +49,7 @@ class EventService:
                     recording=recording,
                     camera=camera,
                     snapshot=picture,
+                    details=json.dumps(details, separators=(",", ":")) if details else None,
                 )
                 db.add(row)
                 db.flush()

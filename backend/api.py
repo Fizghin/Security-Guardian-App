@@ -4,6 +4,7 @@ import json
 import math
 import time
 from datetime import datetime
+from typing import Literal
 from urllib.parse import urlsplit
 
 import cv2
@@ -20,6 +21,7 @@ from services.camera_service import camera_manager
 from services.detection_service import detection_service
 from services.event_service import event_service
 from services.face_service import FaceError, face_service
+from services.learning_service import LearningError, learning_service
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.recording_service import recording_library
@@ -178,6 +180,7 @@ def delete_camera(camera_id: str):
     if cam is None:
         raise HTTPException(404, "Camera not found")
     settings_service.remove_camera(camera_id)
+    learning_service.forget_camera(camera_id, faces=False)  # its ignored spots and suggestions
     event_service.log("SYSTEM", "Camera removed", camera=cam.name)
     return {"ok": True}
 
@@ -555,7 +558,24 @@ def event_snapshot(event_id: int, v: str = ""):
 
 @router.delete("/events")
 def clear_events():
-    return {"deleted": event_service.clear()}
+    deleted = event_service.clear()
+    learning_service.forget_events()
+    return {"deleted": deleted}
+
+
+class FeedbackRequest(BaseModel):
+    verdict: Literal["real", "false_alarm", "wrong_person"] | None
+
+
+@router.post("/events/{event_id}/feedback")
+def event_feedback(event_id: int, req: FeedbackRequest):
+    """The owner's verdict on an event; null clears it. Returns what Guardian learned, in words."""
+    try:
+        return learning_service.feedback(event_id, req.verdict)
+    except KeyError:
+        raise HTTPException(404, "Event not found")
+    except LearningError as exc:
+        raise HTTPException(409, str(exc))
 
 
 # ---- recordings --------------------------------------------------------------------
@@ -747,6 +767,44 @@ def forget_visitor(visitor_id: int):
 @router.delete("/visitors")
 def forget_all_visitors():
     return {"deleted": visitor_service.forget_all()}
+
+
+# ---- learning ----------------------------------------------------------------------
+@router.get("/learning")
+def learning_overview():
+    """Ignored spots, suggestions waiting for an answer, learned face photos and feedback counts."""
+    return learning_service.overview()
+
+
+@router.delete("/learning/spots/{spot_id}")
+def delete_learned_spot(spot_id: str):
+    try:
+        learning_service.delete_spot(spot_id)
+    except KeyError:
+        raise HTTPException(404, "Spot not found")
+    return {"ok": True}
+
+
+class SuggestionAnswer(BaseModel):
+    accept: bool
+
+
+@router.post("/learning/suggestions/{suggestion_id}")
+def answer_suggestion(suggestion_id: str, req: SuggestionAnswer):
+    try:
+        return learning_service.answer(suggestion_id, req.accept)
+    except KeyError:
+        raise HTTPException(404, "Suggestion not found")
+
+
+@router.delete("/learning")
+def forget_learning(camera: str = Query(..., min_length=1)):
+    """Forgets what was learned on one camera: its spots, suggestions and the face photos learned from it."""
+    forgotten = learning_service.forget_camera(camera)
+    if any(forgotten.values()):
+        event_service.log("SYSTEM", "Forgot what Guardian learned on this camera",
+                          camera=learning_service.camera_name(camera))
+    return forgotten
 
 
 # ---- settings ----------------------------------------------------------------------

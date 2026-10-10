@@ -93,6 +93,11 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
               {camera.pending > 0 && <span className="block text-xs text-blue-300">Identifying {camera.pending}…</span>}
             </>
           )}
+          {camera.ignored > 0 && (
+            <a href={href('learning')} className="block text-xs text-zinc-500 hover:text-zinc-300">
+              {camera.ignored} ignored on a learned spot
+            </a>
+          )}
         </Row>
         <Row label="Incident">{camera.incident_started ? formatDuration(camera.incident_seconds) : <span className="text-zinc-400">None</span>}</Row>
         <Row label="Recording">

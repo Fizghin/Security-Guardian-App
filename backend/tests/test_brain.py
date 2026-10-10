@@ -106,7 +106,7 @@ class FakeEvents:
         self.pictures = []
         self.clips = []
 
-    def log(self, event_type, description, severity="INFO", recording=None, camera=None, snapshot=None):
+    def log(self, event_type, description, severity="INFO", recording=None, camera=None, snapshot=None, details=None):
         self.entries.append((event_type, severity, camera))
         self.descriptions.append((event_type, description))
         self.pictures.append((event_type, snapshot))

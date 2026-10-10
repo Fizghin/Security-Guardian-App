@@ -23,6 +23,7 @@ from services.ai_service import ai_service  # noqa: E402
 from services.camera_service import camera_manager  # noqa: E402
 from services.event_service import event_service  # noqa: E402
 from services.face_service import face_service  # noqa: E402
+from services.learning_service import learning_service  # noqa: E402
 from services.phone_service import ensure_certificate  # noqa: E402
 from services.recording_service import recording_library  # noqa: E402
 from services.settings_service import Settings, settings_service  # noqa: E402
@@ -79,6 +80,7 @@ async def _run_phone_listener(server: uvicorn.Server) -> None:
 async def lifespan(app: FastAPI):
     init_db()
     visitor_service.start()
+    learning_service.start()
     cfg = settings_service.get()
     removed = recording_library.prune(cfg.recording.retention_days)
     event_service.prune_snapshots(cfg.recording.retention_days)

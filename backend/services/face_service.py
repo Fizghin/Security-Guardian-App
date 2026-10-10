@@ -17,6 +17,7 @@ true match down to about 0.4, so blurry, tiny, strongly turned or low-confidence
 faces only count as weak evidence.
 """
 import base64
+import json
 import shutil
 import threading
 import time
@@ -46,6 +47,7 @@ QUALITY_MAX_YAW = 0.8   # 0 = frontal, ~1 = full profile
 QUALITY_MIN_SHARPNESS = 15.0
 AMBIGUITY_MARGIN = 0.06  # best insider must beat the runner-up by this much
 ENROL_MIN_PX = 48
+LEARNED_PREFIX = "learned-"  # photos Guardian added by itself (learning_service); the owner's never start with it
 
 
 class FaceError(ValueError):
@@ -222,7 +224,8 @@ class FaceService:
             out.append({
                 "name": person.name,
                 "added": person.stat().st_ctime,
-                "photos": [{"file": p.name, "usable": p.name in usable} for p in photos],
+                "photos": [{"file": p.name, "usable": p.name in usable, "learned": p.name.startswith(LEARNED_PREFIX)}
+                           for p in photos],
             })
         return out
 
@@ -348,6 +351,7 @@ class FaceService:
         with self._lock:
             path.unlink()
             path.with_suffix(".npy").unlink(missing_ok=True)
+            path.with_suffix(".json").unlink(missing_ok=True)  # what a learned photo was learned from
             feats = [(p, f) for p, f in self._gallery.get(path.parent.name, []) if p != path.name]
             if feats:
                 self._gallery[path.parent.name] = feats
@@ -364,6 +368,101 @@ class FaceService:
         with self._lock:
             shutil.rmtree(person_dir)
             self._gallery.pop(name, None)
+
+    # ---- photos Guardian learned by itself (see learning_service) --------------------
+    def similarity(self, name: str, feat: np.ndarray) -> float | None:
+        """How alike a face is to the insider's closest photo, or None when they have no usable photo. Reads
+        the gallery as it is without waiting for the lock, so a camera thread never waits for another's faces."""
+        feats = list(self._gallery.get(name) or [])
+        return max(float(np.dot(feat, f)) for _, f in feats) if feats else None
+
+    @staticmethod
+    def _learned_in(person_dir: Path) -> list[tuple[Path, dict]]:
+        """An insider's learned photos with what each was learned from, oldest first."""
+        out = []
+        for photo in person_dir.glob(f"{LEARNED_PREFIX}*.jpg"):
+            try:
+                meta = json.loads(photo.with_suffix(".json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                meta = None
+            meta = meta if isinstance(meta, dict) else {}
+            try:
+                meta.setdefault("learned", photo.stat().st_mtime)
+            except OSError:
+                continue  # removed meanwhile
+            out.append((photo, meta))
+        return sorted(out, key=lambda pm: pm[1]["learned"])
+
+    def learned_photos(self) -> list[dict]:
+        """Every learned photo: insider, file, and when, where and from which tracked person it was learned.
+        Only reads files, so it never waits for the models to load."""
+        people = sorted(p for p in self.faces_dir.iterdir() if p.is_dir()) if self.faces_dir.is_dir() else []
+        return [{**meta, "name": person.name, "file": photo.name}
+                for person in people for photo, meta in self._learned_in(person)]
+
+    def _forget_file(self, photo: Path) -> None:
+        """Takes a photo out of the gallery (call with the lock held; the files are handled by the caller)."""
+        feats = [(p, f) for p, f in self._gallery.get(photo.parent.name, []) if p != photo.name]
+        if feats:
+            self._gallery[photo.parent.name] = feats
+        else:
+            self._gallery.pop(photo.parent.name, None)
+
+    def add_learned(self, name: str, crop, feat: np.ndarray, meta: dict, keep: int) -> str | None:
+        """Adds a face Guardian learned by itself to an insider. Once they have `keep` learned photos, the
+        oldest learned one makes way; the owner's photos are never replaced. Returns the new photo's file
+        name, or None when the insider was removed meanwhile."""
+        with self._lock:
+            person_dir = self.faces_dir / name
+            if name not in self._gallery or not person_dir.is_dir():
+                return None
+            learned = self._learned_in(person_dir)
+            for photo, _ in learned[:max(0, len(learned) - keep + 1)]:
+                self._forget_file(photo)
+                for suffix in (".jpg", ".npy", ".json"):
+                    photo.with_suffix(suffix).unlink(missing_ok=True)
+            photo = person_dir / f"{LEARNED_PREFIX}{uuid.uuid4().hex[:12]}.jpg"
+            if not cv2.imwrite(str(photo), crop, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+                return None
+            np.save(photo.with_suffix(".npy"), feat)
+            photo.with_suffix(".json").write_text(json.dumps(meta), encoding="utf-8")
+            self._gallery[name].append((photo.name, feat))
+            return photo.name
+
+    def set_aside_learned(self, name: str, files: list[str], folder: Path) -> int:
+        """Moves learned photos out of use into `folder`, so the change can be undone. Returns how many."""
+        moved = 0
+        with self._lock:
+            for file in files:
+                photo = self.faces_dir / name / Path(file).name
+                if not photo.name.startswith(LEARNED_PREFIX) or not photo.is_file():
+                    continue
+                folder.mkdir(parents=True, exist_ok=True)
+                self._forget_file(photo)
+                for suffix in (".jpg", ".npy", ".json"):
+                    if photo.with_suffix(suffix).exists():
+                        shutil.move(str(photo.with_suffix(suffix)), str(folder / photo.with_suffix(suffix).name))
+                moved += 1
+        return moved
+
+    def restore_learned(self, name: str, folder: Path) -> int:
+        """Puts photos moved away by set_aside_learned back, if the insider still exists. Returns how many."""
+        restored = 0
+        with self._lock:
+            person_dir = self.faces_dir / name
+            if not person_dir.is_dir() or not folder.is_dir():
+                return 0
+            for photo in sorted(folder.glob(f"{LEARNED_PREFIX}*.jpg")):
+                cache = photo.with_suffix(".npy")
+                if not cache.exists():
+                    continue
+                feat = np.load(cache)
+                for part in (photo, cache, photo.with_suffix(".json")):
+                    if part.exists():
+                        shutil.move(str(part), str(person_dir / part.name))
+                self._gallery.setdefault(name, []).append((photo.name, feat))
+                restored += 1
+        return restored
 
     @property
     def enrolled_count(self) -> int:

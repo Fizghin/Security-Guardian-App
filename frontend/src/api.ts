@@ -56,6 +56,8 @@ export interface CameraStatus {
   persons: number
   pending: number
   insiders_in_view: string[]
+  /** Still things on a spot the owner taught Guardian to ignore; not counted in persons */
+  ignored: number
   siren_active: boolean
   last_message: string | null
   last_message_time: number | null
@@ -157,6 +159,31 @@ export interface SecurityEvent {
   camera: string | null
   /** File name of the picture of the moment, shown with eventSnapshotUrl; null when there is none. */
   snapshot: string | null
+  /** Who was in that picture (detections, escalations, alerts and recognised people) */
+  details: EventDetails | null
+  /** The owner's verdict on the event */
+  feedback: Verdict | null
+}
+
+export type Verdict = 'real' | 'false_alarm' | 'wrong_person'
+
+export interface EventPerson {
+  /** [x1, y1, x2, y2] as fractions of the picture */
+  box: number[]
+  confidence: number
+  status: 'known' | 'unknown' | 'pending'
+  identity: string | null
+  track_id: number | null
+  face_visible: boolean
+  match_score: number | null
+  simulated?: boolean
+}
+
+export interface EventDetails {
+  camera_id: string
+  people: EventPerson[]
+  /** On events that recognised an insider: who */
+  insider?: string
 }
 
 export interface EventPage {
@@ -206,7 +233,8 @@ export interface RecordingList {
 export interface Insider {
   name: string
   added: number
-  photos: { file: string; usable: boolean }[]
+  /** learned: added by Guardian itself from a clear sighting, not by the owner */
+  photos: { file: string; usable: boolean; learned: boolean }[]
 }
 
 export interface InsiderList {
@@ -279,6 +307,58 @@ export interface VisitorList {
   faces: FaceStatus
 }
 
+export interface LearnedSpot {
+  id: string
+  camera_id: string
+  /** null when the camera has been removed */
+  camera: string | null
+  /** [x1, y1, x2, y2] as fractions of the picture */
+  box: number[]
+  /** How many times it was taught */
+  taught: number
+  /** Epoch seconds */
+  created: number
+  last_matched: number | null
+  /** The events marked "False alarm" that taught it */
+  events: number[]
+}
+
+export interface SpotSuggestion {
+  id: string
+  camera_id: string
+  camera: string | null
+  box: number[]
+  created: number
+  /** The event with the picture of the moment, while it is still in the log */
+  event: SecurityEvent | null
+}
+
+export interface LearnedFaces {
+  name: string
+  /** All of the insider's photos, the owner's and learned ones */
+  photos: number
+  learned: number
+  last_learned: number | null
+  /** Learned photo file names, newest first */
+  files: string[]
+}
+
+export interface FeedbackCounts {
+  camera: string | null
+  real: number
+  false_alarm: number
+  wrong_person: number
+}
+
+export interface Learning {
+  settings: Settings['learning']
+  spots: LearnedSpot[]
+  suggestions: SpotSuggestion[]
+  faces: LearnedFaces[]
+  feedback: { days: number; cameras: FeedbackCounts[] }
+  rules: { still_minutes: number; max_learned: number; learn_every_minutes: number }
+}
+
 export interface Settings {
   armed: boolean
   cameras: CameraConfig[]
@@ -325,6 +405,7 @@ export interface Settings {
   }
   phone: { fps: number; max_width: number; quality: number }
   schedule: { enabled: boolean; rules: ScheduleRule[] }
+  learning: { learn_from_feedback: boolean; improve_faces: boolean }
   notifications: {
     discord_webhook_set: boolean
     telegram_token_set: boolean
@@ -476,6 +557,9 @@ export const api = {
   eventSummary: (hours: number) => request<EventSummary>(`/api/events/summary?hours=${hours}`),
   eventsCsvUrl: (filters: EventFilters) => `/api/events/export.csv${query({ ...filters })}`,
   clearEvents: () => request<{ deleted: number }>('/api/events', { method: 'DELETE' }),
+  /** null clears the verdict and undoes what it taught */
+  eventFeedback: (id: number, verdict: Verdict | null) =>
+    request<{ id: number; feedback: Verdict | null; message: string }>(`/api/events/${id}/feedback`, json('POST', { verdict })),
 
   recordings: (camera?: string) => request<RecordingList>(`/api/recordings${query({ camera })}`),
   recordingUrl: (file: string, download = false) =>
@@ -516,6 +600,13 @@ export const api = {
   // The file name makes the URL unique per photo: a visitor's best faces change as better ones are seen.
   visitorPhotoUrl: (visitor: Visitor, n: number) =>
     `/api/visitors/${visitor.id}/photos/${n}.jpg?v=${encodeURIComponent(visitor.faces[n] ?? '')}`,
+
+  learning: () => request<Learning>('/api/learning'),
+  deleteSpot: (id: string) => request<{ ok: boolean }>(`/api/learning/spots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  answerSuggestion: (id: string, accept: boolean) =>
+    request<{ spot: string | null; message: string }>(`/api/learning/suggestions/${encodeURIComponent(id)}`, json('POST', { accept })),
+  forgetLearning: (cameraId: string) =>
+    request<{ spots: number; suggestions: number; photos: number }>(`/api/learning${query({ camera: cameraId })}`, { method: 'DELETE' }),
 
   settings: () => request<Settings>('/api/settings'),
   updateSettings: (patch: SettingsPatch) => request<Settings>('/api/settings', json('PATCH', patch)),
