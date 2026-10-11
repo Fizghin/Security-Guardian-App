@@ -107,10 +107,10 @@ const SystemConfig: React.FC = () => {
             {/* System Health */}
             <div className="col-span-12">
                 <SciFiCard title="SYSTEM DIAGNOSTICS" color="electric">
-                    <div className="grid grid-cols-4 gap-4 text-center">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-4 text-center">
                         {['CPU TEMPERATE: 45°C', 'GPU USAGE: 32%', 'NETWORK: 1.2 GB/s', 'STORAGE: 1.4TB FREE'].map((stat, i) => (
-                            <div key={i} className="p-4 bg-black/40 border border-electric/20 rounded">
-                                <div className="text-electric font-mono text-xs tracking-wider">{stat}</div>
+                            <div key={i} className="p-2 md:p-4 bg-black/40 border border-electric/20 rounded">
+                                <div className="text-electric font-mono text-[10px] md:text-xs tracking-wider">{stat}</div>
                             </div>
                         ))}
                     </div>

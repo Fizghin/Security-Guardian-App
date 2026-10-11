@@ -30,10 +30,10 @@ const SurveillanceView: React.FC<SurveillanceViewProps> = ({ stats }) => {
     };
 
     return (
-        <div className="grid grid-cols-12 gap-6 min-h-full">
+        <div className="grid grid-cols-12 gap-4 md:gap-6 min-h-full">
             {/* Video Feed & Main Controls */}
-            <div className="col-span-12 lg:col-span-8 flex flex-col gap-6 h-full">
-                <SciFiCard className="flex-1 p-0 overflow-hidden border-cyan/50 shadow-[0_0_30px_rgba(0,240,255,0.1)] relative">
+            <div className="col-span-12 lg:col-span-8 flex flex-col gap-4 md:gap-6 h-full">
+                <SciFiCard className="flex-1 p-0 overflow-hidden border-cyan/50 shadow-[0_0_30px_rgba(0,240,255,0.1)] relative min-h-[250px] xs:min-h-[300px]">
                     <div className="absolute top-2 left-2 z-10 px-2 py-1 bg-black/60 rounded border border-cyan/30 text-[10px] text-cyan">
                         CAM_01 :: MAIN_ENTRY
                     </div>
@@ -43,21 +43,21 @@ const SurveillanceView: React.FC<SurveillanceViewProps> = ({ stats }) => {
                     />
                 </SciFiCard>
 
-                <div className="h-48 grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
                     <SciFiCard title="QUICK STATS" className="h-full text-xs">
-                        <div className="grid grid-cols-2 gap-4 mt-2">
+                        <div className="grid grid-cols-2 gap-2 mt-2">
                             <div>
-                                <div className="text-gray-500">TODAY</div>
-                                <div className="text-2xl text-white font-bold">{stats.total_events}</div>
+                                <div className="text-gray-500 text-[10px] md:text-xs">TODAY</div>
+                                <div className="text-xl md:text-2xl text-white font-bold">{stats.total_events}</div>
                             </div>
                             <div>
-                                <div className="text-gray-500">THREAT LEVEL</div>
-                                <div className="text-2xl text-magenta font-bold">{stats.threat_level}</div>
+                                <div className="text-gray-500 text-[10px] md:text-xs">THREAT LEVEL</div>
+                                <div className="text-xl md:text-2xl text-magenta font-bold">{stats.threat_level}</div>
                             </div>
                         </div>
                     </SciFiCard>
-                    <SciFiCard title="ACTIVE THREATS" className="h-full" color={stats.active_threats > 0 ? "magenta" : "cyan"}>
-                        <div className={`flex items-center justify-center h-full font-bold tracking-widest ${stats.active_threats > 0 ? "text-red-500 animate-pulse text-xl" : "text-green-500"}`}>
+                    <SciFiCard title="ACTIVE THREATS" className="h-full min-h-[5rem]" color={stats.active_threats > 0 ? "magenta" : "cyan"}>
+                        <div className={`flex items-center justify-center h-full py-2 font-bold tracking-widest ${stats.active_threats > 0 ? "text-red-500 animate-pulse text-base md:text-xl" : "text-green-500 text-sm md:text-base"}`}>
                             {stats.active_threats > 0 ? "INTRUDER DETECTED" : "NONE DETECTED"}
                         </div>
                     </SciFiCard>
@@ -65,7 +65,7 @@ const SurveillanceView: React.FC<SurveillanceViewProps> = ({ stats }) => {
             </div>
 
             {/* Right Panel: Controls */}
-            <div className="col-span-12 lg:col-span-4 flex flex-col gap-6 h-full">
+            <div className="col-span-12 lg:col-span-4 flex flex-col gap-4 md:gap-6 h-full">
                 <SciFiCard title="AI PROTOCOLS" className="flex-none" color="electric">
                     <div className="space-y-6">
                         {[
