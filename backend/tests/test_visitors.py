@@ -353,6 +353,9 @@ class People:
     def detect_persons(self, frame, confidence, min_height):
         return [Detection(confidence=0.9, bbox=list(box)) for box in self.boxes]
 
+    def detect(self, frame, confidence, min_height, bags=False):
+        return self.detect_persons(frame, confidence, min_height), []
+
 
 class FaceModels:
     """Loaded, with no insiders enrolled; every person shows this face."""

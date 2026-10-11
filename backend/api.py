@@ -26,6 +26,7 @@ from services.learning_service import LearningError, learning_service
 from services.heatmap_service import KEEP_DAYS as HEATMAP_DAYS, heatmap_service
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
+from services.pose_service import pose_service
 from services.recording_service import recording_library
 from services.routine_service import routine_service
 from services.schedule_service import time_zone
@@ -135,6 +136,7 @@ class CameraUpdate(BaseModel):
     audio: str | None = None
     zones: list[list[list[float]]] | None = None
     zones_aspect: float | None = None  # width / height of the picture the zones were drawn on
+    watch_spots: list[dict] | None = None  # [{name, polygon}], checked with the settings
 
 
 def _camera_view(cfg) -> dict:
@@ -188,6 +190,15 @@ def delete_camera(camera_id: str):
     heatmap_service.forget(camera_id)  # a new camera that gets this id starts with an empty map
     event_service.log("SYSTEM", "Camera removed", camera=cam.name)
     return {"ok": True}
+
+
+@router.post("/cameras/{camera_id}/watch-spots/accept")
+def accept_watch_spots(camera_id: str):
+    """The changed watch spots' new look becomes their normal."""
+    names = _unit(camera_id).sentinel.accept_spots()
+    if not names:
+        raise HTTPException(409, "None of this camera's watch spots looks different right now")
+    return {"ok": True, "spots": names}
 
 
 @router.post("/cameras/{camera_id}/reset-link")
@@ -935,6 +946,7 @@ def system():
         "siren": siren_service.status(),
         "talk": talk_player_status(),
         "faces": face_service.status(),
+        "pose": pose_service.status(),
         "notifications": notification_service.status(),
         "ai": ai_service.status(),
         "phone": {"enabled": PHONES_ENABLED, "port": PHONE_PORT, "addresses": lan_addresses(), "public_url": PUBLIC_URL},

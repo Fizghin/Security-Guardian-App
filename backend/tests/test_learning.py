@@ -96,6 +96,9 @@ class People:
     def detect_persons(self, frame, confidence, min_height):
         return [Detection(confidence=0.9, bbox=list(box)) for box in self.boxes]
 
+    def detect(self, frame, confidence, min_height, bags=False):
+        return self.detect_persons(frame, confidence, min_height), []
+
 
 class Faces:
     """The face models: every person shows `look`, or no face at all."""

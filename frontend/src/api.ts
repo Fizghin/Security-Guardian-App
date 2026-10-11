@@ -67,6 +67,18 @@ export interface CameraStatus {
   zones_mismatch: boolean
   /** The camera's learned routine; unusual_now while an incident that started at a usually quiet time goes on. */
   routine: { learning: boolean; days_watched: number; days_needed: number; unusual_now: boolean }
+  sentinel: SentinelStatus
+}
+
+export interface SentinelStatus {
+  /** How many watch spots the camera has */
+  spots: number
+  /** Watch spots that look different; since is when the change began (epoch seconds) */
+  changed_spots: { name: string; since: number }[]
+  /** Bags left with nobody near them, not yet picked up */
+  left_bags: number
+  /** People who may have fallen and haven't got up */
+  fallen: number
 }
 
 export interface Status {
@@ -149,6 +161,13 @@ export interface CameraConfig {
   zones: number[][][]
   /** Width / height of the picture the zones were drawn on (null when unknown or no zones). */
   zones_aspect: number | null
+  /** Named areas that should keep looking as usual, e.g. a gate: polygons like zones. */
+  watch_spots: WatchSpot[]
+}
+
+export interface WatchSpot {
+  name: string
+  polygon: number[][]
 }
 
 export interface SecurityEvent {
@@ -381,6 +400,11 @@ export interface Settings {
     remember_visitors: boolean
     visitor_retention_days: number
     visit_gap_minutes: number
+    /** Bags still this long with nobody near them are left; 0 = off */
+    unattended_minutes: number
+    fall_alerts: 'off' | 'log' | 'alert'
+    /** After a fall alert, ask "Are you OK?" through the camera's speaker */
+    fall_ask: boolean
   }
   escalation: {
     level2_after: number
@@ -549,6 +573,8 @@ export interface SystemInfo {
   siren: Status['siren']
   talk: TalkPlayer
   faces: FaceStatus
+  /** The body keypoint model that checks for falls; it loads the first time someone may be lying down. */
+  pose: { state: 'idle' | 'loading' | 'ready' | 'error'; error: string | null }
   ai: AIStatus
   notifications: { discord: boolean; telegram: boolean; ntfy: boolean; webhook: boolean; email: boolean; any: boolean; email_to: string | null }
   phone: { enabled: boolean; port: number; addresses: string[]; public_url: string }
@@ -609,8 +635,9 @@ export const api = {
   cameras: () => request<{ cameras: CameraConfig[]; phone: SystemInfo['phone'] }>('/api/cameras'),
   addCamera: (body: { name: string; source: string; audio?: AudioOutput }) =>
     request<CameraConfig>('/api/cameras', json('POST', body)),
-  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio' | 'zones' | 'zones_aspect'>>) =>
+  updateCamera: (id: string, body: Partial<Pick<CameraConfig, 'name' | 'source' | 'enabled' | 'audio' | 'zones' | 'zones_aspect' | 'watch_spots'>>) =>
     request<CameraConfig>(cam(id), json('PATCH', body)),
+  acceptWatchSpots: (id: string) => request<{ ok: boolean; spots: string[] }>(`${cam(id)}/watch-spots/accept`, json('POST')),
   deleteCamera: (id: string) => request<{ ok: boolean }>(cam(id), { method: 'DELETE' }),
   resetPhoneLink: (id: string) => request<CameraConfig>(`${cam(id)}/reset-link`, json('POST')),
   pairing: (id: string) => request<Pairing>(`${cam(id)}/pairing`),

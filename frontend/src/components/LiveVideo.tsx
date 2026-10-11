@@ -10,6 +10,27 @@ import HeatmapOverlay from './HeatmapOverlay'
 const STALE_MS = 3000
 const CAPTION_SECONDS = 12
 
+/** Changed watch spots, bags left behind and possible falls, under the tile's title bar. */
+function SentinelChips({ camera, compact }: { camera: CameraStatus; compact: boolean }) {
+  const { fallen, left_bags: bags, changed_spots: spots } = camera.sentinel
+  const chips: { text: string; red?: boolean }[] = [
+    ...(fallen ? [{ text: 'May have fallen', red: true }] : []),
+    ...(bags ? [{ text: bags === 1 ? 'Bag left' : `${bags} bags left` }] : []),
+    ...spots.map((s) => ({ text: `${s.name} changed` })),
+  ]
+  if (!chips.length) return null
+  const shown = compact && chips.length > 2 ? [...chips.slice(0, 1), { text: `+${chips.length - 1} more` }] : chips
+  return (
+    <div className={cx('absolute inset-x-0 flex flex-wrap gap-1', compact ? 'top-7 px-2' : 'top-10 px-3')}>
+      {shown.map((c) => (
+        <span key={c.text} className={cx('max-w-full truncate rounded px-1.5 py-0.5 text-[10px] font-semibold', c.red ? 'bg-red-600 text-white' : 'bg-amber-500 text-black')}>
+          {c.text}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export default function LiveVideo({
   camera,
   compact = false,
@@ -170,6 +191,8 @@ export default function LiveVideo({
           )}
         </div>
       </div>
+
+      {!problem && !heatmap && <SentinelChips camera={camera} compact={compact} />}
 
       {problem && !heatmap && (
         <div className={cx('absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center', compact ? 'p-3' : 'p-6')}>

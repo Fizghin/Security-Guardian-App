@@ -8,7 +8,7 @@ import LiveVideo from '../components/LiveVideo'
 import RecordingPlayer from '../components/RecordingPlayer'
 import { Button, Card, Empty } from '../components/ui'
 import { cx } from '../lib/cx'
-import { formatDuration, LEVELS, timeAgo } from '../lib/format'
+import { formatDuration, formatHour, LEVELS, timeAgo } from '../lib/format'
 import { href } from '../lib/route'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
@@ -48,6 +48,60 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span className="shrink-0 text-zinc-500">{label}</span>
       <span className="min-w-0 text-right text-zinc-200">{children}</span>
     </div>
+  )
+}
+
+/** Bags left behind, people who may have fallen and watch spots that look different. */
+function SentinelRows({ camera }: { camera: CameraStatus }) {
+  const notify = useToast()
+  const { refresh } = useStatus()
+  const [busy, setBusy] = useState(false)
+  const { fallen, left_bags: bags, spots, changed_spots: changed } = camera.sentinel
+
+  const accept = async () => {
+    setBusy(true)
+    try {
+      const { spots: names } = await api.acceptWatchSpots(camera.id)
+      notify(`How ${names.join(', ')} ${names.length === 1 ? 'looks' : 'look'} now counts as normal`, 'success')
+      await refresh()
+    } catch (err) {
+      notify(errorMessage(err), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      {fallen > 0 && (
+        <Row label="Possible fall">
+          <span className="text-red-400">{fallen === 1 ? 'Someone may have fallen' : `${fallen} people may have fallen`}</span>
+        </Row>
+      )}
+      {bags > 0 && (
+        <Row label="Bags">
+          <span className="text-amber-400">{bags === 1 ? 'A bag was left unattended' : `${bags} bags were left unattended`}</span>
+        </Row>
+      )}
+      {spots > 0 && (
+        <Row label="Watch spots">
+          {changed.length === 0 ? (
+            <span className="text-zinc-400">No changes seen</span>
+          ) : (
+            <>
+              {changed.map((s) => (
+                <span key={s.name} className="block text-amber-400">
+                  {s.name} changed at {formatHour(new Date(s.since * 1000).toISOString())}
+                </span>
+              ))}
+              <button type="button" className="text-xs font-medium text-blue-400 hover:text-blue-300 disabled:opacity-50" disabled={busy} onClick={accept} title="Take how it looks now as its normal look">
+                Mark as normal
+              </button>
+            </>
+          )}
+        </Row>
+      )}
+    </>
   )
 }
 
@@ -100,6 +154,7 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
             </a>
           )}
         </Row>
+        <SentinelRows camera={camera} />
         <Row label="Incident">{camera.incident_started ? formatDuration(camera.incident_seconds) : <span className="text-zinc-400">None</span>}</Row>
         <Row label="Recording">
           {camera.recording.active ? (
