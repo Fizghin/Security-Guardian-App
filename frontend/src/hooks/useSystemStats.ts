@@ -7,7 +7,12 @@ export const useSystemStats = (pollInterval = 2000) => {
         total_events: 0,
         active_threats: 0,
         threat_level: 0,
-        system_status: 'OFFLINE'
+        system_status: 'OFFLINE',
+        ai_personality: {
+            intimidation: 50,
+            humor: 20,
+            persistence: 80
+        }
     });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<Error | null>(null);

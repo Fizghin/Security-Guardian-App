@@ -72,7 +72,7 @@ const Dashboard: React.FC = () => {
                     onMenuClick={() => setIsMobileMenuOpen(true)}
                 />
 
-                <div className="p-6 flex-1 overflow-y-auto relative custom-scrollbar">
+                <div className="p-3 md:p-6 flex-1 overflow-y-auto relative custom-scrollbar">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeView}

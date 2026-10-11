@@ -1,5 +1,29 @@
-const BASE_URL = 'http://127.0.0.1:8000';
-const WS_URL = 'ws://127.0.0.1:8000/ws/stream';
+const STORAGE_KEY = 'guardian_server_host';
+
+export const getStoredHost = (): string => {
+    if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) return stored.trim();
+    }
+    return '127.0.0.1:8000';
+};
+
+export const setStoredHost = (host: string): void => {
+    if (typeof window !== 'undefined') {
+        const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        localStorage.setItem(STORAGE_KEY, cleanHost);
+    }
+};
+
+export const getBaseUrl = (): string => {
+    const host = getStoredHost();
+    return `http://${host}`;
+};
+
+export const getWsUrl = (): string => {
+    const host = getStoredHost();
+    return `ws://${host}/ws/stream`;
+};
 
 export interface SystemStats {
     total_events: number;
@@ -25,25 +49,25 @@ export interface SecurityEvent {
 
 export const api = {
     async getStats(): Promise<SystemStats> {
-        const res = await fetch(`${BASE_URL}/api/stats`);
+        const res = await fetch(`${getBaseUrl()}/api/stats`);
         if (!res.ok) throw new Error('Failed to fetch stats');
         return res.json();
     },
 
     async triggerPanic(): Promise<{ status: string }> {
-        const res = await fetch(`${BASE_URL}/api/panic`, { method: 'POST' });
+        const res = await fetch(`${getBaseUrl()}/api/panic`, { method: 'POST' });
         if (!res.ok) throw new Error('Panic protocol failed');
         return res.json();
     },
 
     async simulatePerson(): Promise<{ status: string }> {
-        const res = await fetch(`${BASE_URL}/api/simulate/person`, { method: 'POST' });
+        const res = await fetch(`${getBaseUrl()}/api/simulate/person`, { method: 'POST' });
         if (!res.ok) throw new Error('Simulation failed');
         return res.json();
     },
 
     async updateConfig(config: any): Promise<{ status: string }> {
-        const res = await fetch(`${BASE_URL}/api/config`, {
+        const res = await fetch(`${getBaseUrl()}/api/config`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -53,7 +77,7 @@ export const api = {
     },
 
     async getEvents(limit: number = 50): Promise<SecurityEvent[]> {
-        const res = await fetch(`${BASE_URL}/api/events?limit=${limit}`);
+        const res = await fetch(`${getBaseUrl()}/api/events?limit=${limit}`);
         if (!res.ok) throw new Error('Failed to fetch events');
         return res.json();
     },
@@ -63,7 +87,7 @@ export const api = {
         formData.append('name', name);
         formData.append('file', file);
 
-        const res = await fetch(`${BASE_URL}/api/faces/upload`, {
+        const res = await fetch(`${getBaseUrl()}/api/faces/upload`, {
             method: 'POST',
             body: formData,
         });
@@ -74,6 +98,6 @@ export const api = {
     },
 
     getStreamUrl(): string {
-        return WS_URL;
+        return getWsUrl();
     }
 };
