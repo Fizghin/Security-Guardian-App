@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
-import { api, type AITestResult, type NotificationChannel, type NotificationResult, type ScheduleRule, type Settings, type SettingsPatch, type Status } from '../api'
+import { Download, Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react'
+import {
+  api,
+  type AITestResult,
+  type AudioModel,
+  type AudioModels,
+  type NotificationChannel,
+  type NotificationResult,
+  type ScheduleRule,
+  type Settings,
+  type SettingsPatch,
+  type SoundAction,
+  type SoundGroup,
+  type Status,
+} from '../api'
 import CamerasSection from '../components/CamerasSection'
 import { Button, Card, Dot, ErrorNote, Field, Slider, Toggle } from '../components/ui'
 import VaultPanel from '../components/VaultPanel'
@@ -273,6 +286,128 @@ function ModelSection({ value, save }: { value: Settings['ai']; save: Save }) {
   )
 }
 
+// ---- Guard Bot ---------------------------------------------------------------------------
+const guardFields = (ai: Settings['ai']) => ({
+  guard_bot: ai.guard_bot,
+  stt_model: ai.stt_model,
+  owner_instructions: ai.owner_instructions,
+})
+
+const STT_MODELS: [Settings['ai']['stt_model'], string][] = [
+  ['tiny.en', 'Fastest (75 MB)'],
+  ['base.en', 'More accurate (145 MB)'],
+  ['small.en', 'Most accurate, slow on older computers (484 MB)'],
+]
+
+function modelText(m: AudioModel): { text: string; tone: string } {
+  switch (m.state) {
+    case 'missing':
+      return { text: m.error ?? 'Not installed', tone: 'text-amber-400' }
+    case 'downloading':
+      return { text: `Downloading…${m.progress != null ? ` ${Math.round(m.progress * 100)}%` : ''}`, tone: 'text-blue-300' }
+    case 'loading':
+      return { text: 'Loading…', tone: 'text-blue-300' }
+    case 'ready':
+      return { text: 'Ready', tone: 'text-emerald-400' }
+    case 'error':
+      return { text: m.error ?? 'Could not be set up', tone: 'text-red-400' }
+    default:
+      return m.downloaded
+        ? { text: 'Downloaded; loads when first needed', tone: 'text-zinc-400' }
+        : { text: `Not downloaded yet (${m.size_mb} MB). It downloads when first needed, or now.`, tone: 'text-zinc-400' }
+  }
+}
+
+function ModelStatus({ name, model, onDownload }: { name: string; model?: AudioModel; onDownload: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  if (!model) return null
+  const { text, tone } = modelText(model)
+  const canDownload = model.installed && (model.state === 'error' || (model.state === 'idle' && !model.downloaded))
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-950/60 p-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-zinc-200">{name}</div>
+        <div className={cx('break-words text-xs', tone)}>{text}</div>
+        {model.state === 'downloading' && model.progress != null && (
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+            <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${Math.round(model.progress * 100)}%` }} />
+          </div>
+        )}
+      </div>
+      {canDownload && (
+        <Button
+          size="sm"
+          icon={<Download className="h-4 w-4" />}
+          loading={busy}
+          onClick={async () => {
+            setBusy(true)
+            await onDownload()
+            setBusy(false)
+          }}
+        >
+          {model.state === 'error' ? 'Try again' : 'Download model'}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function GuardBotSection({ value, save }: { value: Settings['ai']; save: Save }) {
+  const notify = useToast()
+  const d = useDraft(guardFields(value))
+  const models = usePoll(api.audioModels, 1500)
+  const download = async (what: keyof AudioModels) => {
+    try {
+      await api.downloadAudioModel(what)
+      await models.refresh()
+    } catch (err) {
+      notify(errorMessage(err), 'error')
+    }
+  }
+  return (
+    <Section
+      id="guard-bot"
+      title="Guard Bot"
+      description="During an intrusion, Guardian listens through the phone camera’s microphone, turns what the person says into text on this computer and answers them through the camera’s speaker."
+      dirty={d.dirty}
+      onReset={d.reset}
+      onSave={() => save({ ai: d.changes })}
+    >
+      <Toggle
+        checked={d.draft.guard_bot}
+        onChange={(v) => d.set('guard_bot', v)}
+        label="Answer people who speak during an intrusion"
+        description="Only while an unrecognised person is on a phone camera with its microphone on. Each reply is one short sentence that uses only what is true right now and your instructions; it never says the police are coming, and says you were alerted only if you were. At most one reply every 6 seconds, and none while you talk through the camera."
+      />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Speech-to-text model" hint="Runs on this computer’s processor. Larger models understand more but answer later.">
+          <select className="input" value={d.draft.stt_model} onChange={(e) => d.set('stt_model', e.target.value as Settings['ai']['stt_model'])}>
+            {STT_MODELS.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Your instructions" hint="Facts replies may use, e.g. “Deliveries go to the side door”. Leave empty if there are none.">
+          <textarea
+            className="input min-h-[4.5rem]"
+            maxLength={300}
+            value={d.draft.owner_instructions}
+            placeholder="Deliveries go to the side door"
+            onChange={(e) => d.set('owner_instructions', e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="space-y-2">
+        <ModelStatus name={`Speech-to-text (${models.data?.speech.model ?? value.stt_model})`} model={models.data?.speech} onDownload={() => download('speech')} />
+        <ModelStatus name="Sound recognition (YAMNet, Settings → Detection)" model={models.data?.sounds} onDownload={() => download('sounds')} />
+        {d.draft.stt_model !== value.stt_model && <p className="hint">Save to see the status of the model you picked.</p>}
+      </div>
+    </Section>
+  )
+}
+
 // ---- Voice & personality ------------------------------------------------------------
 function toneText(intimidation: number, humor: number) {
   let tone = intimidation >= 67 ? 'Stern and intimidating' : intimidation >= 34 ? 'Firm and authoritative' : 'Calm and polite'
@@ -407,6 +542,17 @@ function ScheduleSection({ value, save, status }: { value: Settings['schedule'];
 }
 
 // ---- Detection --------------------------------------------------------------------------
+const SOUND_GROUPS: [SoundGroup, string][] = [
+  ['glass', 'Glass breaking'],
+  ['alarm', 'Smoke or fire alarm'],
+  ['scream', 'Scream or shout'],
+  ['gunshot', 'Gunshot or explosion'],
+  ['banging', 'Banging or knocking'],
+  ['dog', 'Dog barking'],
+  ['baby', 'Baby crying'],
+  ['siren', 'Siren'],
+]
+
 function DetectionSection({ value, save }: { value: Settings['detection']; save: Save }) {
   const d = useDraft(value)
   return (
@@ -426,8 +572,39 @@ function DetectionSection({ value, save }: { value: Settings['detection']; save:
           <Slider label="Trust after recognition" value={d.draft.insider_grace_seconds} min={0} max={300} step={5} format={(v) => `${v} s`} onChange={(v) => d.set('insider_grace_seconds', v)} hint="Keeps trusting an insider who turns away from the camera" />
         </div>
       )}
+      <div className="space-y-4 border-t border-zinc-800 pt-4">
+        <Toggle
+          checked={d.draft.sound_recognition}
+          onChange={(v) => d.set('sound_recognition', v)}
+          label="Recognise sounds"
+          description="Phone cameras send their microphone to this computer (about 32 kB/s each), which tells breaking glass from a barking dog. Downloads a 4 MB sound model on first use (status under Guard Bot)."
+        />
+        {d.draft.sound_recognition && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {SOUND_GROUPS.map(([key, label]) => (
+                <Field key={key} label={label}>
+                  <select
+                    className="input"
+                    value={d.draft.sound_actions[key]}
+                    onChange={(e) => d.set('sound_actions', { ...d.draft.sound_actions, [key]: e.target.value as SoundAction })}
+                  >
+                    <option value="off">Ignore</option>
+                    <option value="log">Log with a picture</option>
+                    <option value="alert">Log and alert me</option>
+                  </select>
+                </Field>
+              ))}
+            </div>
+            <p className="hint">
+              A sound counts when it is heard clearly for about a second, at most once a minute per kind of sound and camera. While armed, glass, alarms, screams and gunshots set to alert raise the camera
+              to level 3 and record, even with nobody on camera. Smoke alarms and a crying baby set to alert reach you even while disarmed. Guardian’s own voice and siren are ignored.
+            </p>
+          </>
+        )}
+      </div>
       <div className="grid gap-5 border-t border-zinc-800 pt-4 sm:grid-cols-2">
-        <Field label="Loud sounds" hint="Heard by the microphones of phone cameras. Alerts also record a clip and alert you while armed. Nothing is spoken to whoever made the sound.">
+        <Field label="Loud sounds" hint="Used when sound recognition is off or can’t run. Heard by the microphones of phone cameras. Alerts also record a clip and alert you while armed. Nothing is spoken to whoever made the sound.">
           <select className="input" value={d.draft.sound_alerts} onChange={(e) => d.set('sound_alerts', e.target.value as Settings['detection']['sound_alerts'])}>
             <option value="off">Ignore</option>
             <option value="log">Log them with a picture</option>
@@ -952,6 +1129,7 @@ const SECTIONS = [
   ['cameras', 'Cameras'],
   ['schedule', 'Schedule'],
   ['ai', 'Language model'],
+  ['guard-bot', 'Guard Bot'],
   ['voice', 'Voice'],
   ['detection', 'Detection'],
   ['learning', 'Learning'],
@@ -1011,6 +1189,7 @@ export default function SettingsPage({ section }: { section: string }) {
         <CamerasSection key={k(settings.phone)} phoneSettings={settings.phone} savePhone={(phone) => save({ phone })} />
         <ScheduleSection key={k(settings.schedule)} value={settings.schedule} save={save} status={status} />
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
+        <GuardBotSection key={k(guardFields(settings.ai))} value={settings.ai} save={save} />
         <VoiceSection key={k(voiceFields(settings.ai))} value={settings.ai} save={save} voice={status?.voice} />
         <DetectionSection key={k(settings.detection)} value={settings.detection} save={save} />
         <LearningSection key={k(settings.learning)} value={settings.learning} save={save} />

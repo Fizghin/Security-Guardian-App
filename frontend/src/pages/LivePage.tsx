@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { Camera, FlaskConical, LayoutGrid, Megaphone, Square } from 'lucide-react'
 import { api, type CameraStatus, type SecurityEvent, type Status } from '../api'
 import BriefingCard from '../components/BriefingCard'
+import Conversation from '../components/Conversation'
 import EventRow, { EventPicture } from '../components/EventRow'
 import LiveAudio from '../components/LiveAudio'
 import LiveVideo from '../components/LiveVideo'
@@ -155,7 +156,10 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
           )}
         </Row>
         <SentinelRows camera={camera} />
-        <Row label="Incident">{camera.incident_started ? formatDuration(camera.incident_seconds) : <span className="text-zinc-400">None</span>}</Row>
+        <Row label="Incident">
+          {camera.incident_started ? formatDuration(camera.incident_seconds) : <span className="text-zinc-400">None</span>}
+          {camera.heard && <span className="block text-xs text-orange-300">{camera.heard} heard</span>}
+        </Row>
         <Row label="Recording">
           {camera.recording.active ? (
             <span className="text-red-400">{camera.recording.stopping ? 'Finishing clip…' : 'Recording'}</span>
@@ -186,6 +190,8 @@ function CameraCard({ camera, status }: { camera: CameraStatus; status: Status }
               <span className="tabular-nums text-zinc-300">
                 Live{camera.audio.level_db != null && ` · ${Math.round(camera.audio.level_db)} dB`}
                 {camera.audio.listeners > 0 && ` · ${camera.audio.listeners} listening`}
+                {camera.sound_recognition && <span className="block text-xs text-zinc-500">Recognising sounds</span>}
+                {camera.guard_bot?.listening && <span className="block text-xs text-zinc-500">Guard Bot is listening</span>}
               </span>
             ) : (
               <span className="text-zinc-400">Off</span>
@@ -361,6 +367,7 @@ export default function LivePage() {
           </div>
         )}
 
+        {cameras.filter((c) => c.guard_bot?.active).map((c) => <Conversation key={c.id} camera={c} />)}
         {status && selected && <Controls camera={selected} status={status} />}
       </div>
 

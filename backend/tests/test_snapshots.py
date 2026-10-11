@@ -175,7 +175,7 @@ def test_retention_applies_every_hour_without_any_clip(events, tmp_path):
     start = manager._pruned_at
     manager.prune_old_media(start + 600)
     assert latest(events, search="Sam")["snapshot"], "not due yet"
-    manager.prune_old_media(start + 3600)
+    manager.prune_old_media(start + 3601)  # (start + 3600) - start can round to just under 3600
     assert latest(events, search="Sam")["snapshot"] is None
     assert not list(events.snapshot_dir.glob("*.jpg"))
 

@@ -68,6 +68,11 @@ export interface CameraStatus {
   /** The camera's learned routine; unusual_now while an incident that started at a usually quiet time goes on. */
   routine: { learning: boolean; days_watched: number; days_needed: number; unusual_now: boolean }
   sentinel: SentinelStatus
+  /** A sound that raised this camera's incident, e.g. "Glass breaking" */
+  heard: string | null
+  /** The phone is streaming its microphone to the sound recognition */
+  sound_recognition: boolean
+  guard_bot: GuardBotStatus
 }
 
 export interface SentinelStatus {
@@ -80,6 +85,45 @@ export interface SentinelStatus {
   /** People who may have fallen and haven't got up */
   fallen: number
 }
+
+export interface ConversationEntry {
+  /** owner: a line typed on the Live page */
+  who: 'person' | 'guardian' | 'owner'
+  text: string
+  time: number
+}
+
+export interface GuardBotStatus {
+  /** An intrusion is going on, so a conversation can happen */
+  active: boolean
+  /** Guardian is hearing the phone's microphone and transcribing speech */
+  listening: boolean
+  /** A reply is being written */
+  thinking: boolean
+  /** Why it isn't listening during an intrusion */
+  note: string | null
+  entries: ConversationEntry[]
+}
+
+export interface AudioModel {
+  installed: boolean
+  state: 'missing' | 'idle' | 'downloading' | 'loading' | 'ready' | 'error'
+  downloaded: boolean
+  /** 0–1 while downloading, when the size is known */
+  progress: number | null
+  error: string | null
+  size_mb: number
+  /** speech only: the model setting it describes */
+  model?: string
+}
+
+export interface AudioModels {
+  speech: AudioModel
+  sounds: AudioModel
+}
+
+export type SoundAction = 'off' | 'log' | 'alert'
+export type SoundGroup = 'glass' | 'alarm' | 'scream' | 'gunshot' | 'banging' | 'dog' | 'baby' | 'siren'
 
 export interface Status {
   armed: boolean
@@ -397,6 +441,8 @@ export interface Settings {
     insider_grace_seconds: number
     sound_alerts: 'off' | 'log' | 'alert'
     sound_sensitivity: number
+    sound_recognition: boolean
+    sound_actions: Record<SoundGroup, SoundAction>
     remember_visitors: boolean
     visitor_retention_days: number
     visit_gap_minutes: number
@@ -432,6 +478,9 @@ export interface Settings {
     voice_rate: number
     greet_insiders: boolean
     greet_cooldown_minutes: number
+    guard_bot: boolean
+    stt_model: 'tiny.en' | 'base.en' | 'small.en'
+    owner_instructions: string
   }
   phone: { fps: number; max_width: number; quality: number }
   schedule: { enabled: boolean; rules: ScheduleRule[] }
@@ -720,6 +769,8 @@ export const api = {
   aiModels: (provider: string, baseUrl: string) =>
     request<{ models: string[]; error: string | null }>(`/api/ai/models${query({ provider, base_url: baseUrl })}`),
   aiTest: (level: number, speak: boolean) => request<AITestResult>('/api/ai/test', json('POST', { level, speak })),
+  audioModels: () => request<AudioModels>('/api/audio-models'),
+  downloadAudioModel: (what: keyof AudioModels) => request<AudioModels>(`/api/audio-models/${what}/download`, json('POST')),
 
   system: () => request<SystemInfo>('/api/system'),
   // POST, so a token typed in stays out of URLs that proxies and tunnels log

@@ -9,6 +9,10 @@ and that camera's voice warnings wait meanwhile.
 Listen: a phone sends its microphone only while at least one dashboard listens,
 and the server passes it on to all of them.
 
+Analysis: the server can also ask for the microphone for its own use, to
+recognise sounds and, during an intrusion, to hear what the person says (the
+Guard Bot). The phone then sends it whether or not anyone listens.
+
 The phone also reports its microphone level about four times a second; the
 camera's SoundMonitor takes those readings from here.
 
@@ -28,6 +32,7 @@ import time
 import wave
 from collections import deque
 from dataclasses import dataclass
+from typing import Callable
 
 from config import DATA_DIR
 
@@ -235,13 +240,23 @@ class AudioRelay:
         self.level_db: float | None = None
         self.level_time = 0.0
         self._levels: deque = deque(maxlen=400)  # (time, dB) not yet seen by the sound monitor
+        self.analysis: frozenset[str] = frozenset()  # what the server wants the microphone for: "sounds", "speech"
+        self.analyse: Callable[[bytes], None] | None = None  # gets the microphone while analysis is wanted
+        self.audio_time = 0.0  # when the phone last sent microphone audio
+        self._loop: asyncio.AbstractEventLoop | None = None  # the loop the phone's connection lives on
 
     # ---- the phone ------------------------------------------------------------------
     def connect_phone(self) -> PhoneAudio:
         old, self.phone = self.phone, PhoneAudio()
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         if old is not None:
             old.close()  # the page was opened again, or reconnected before the old socket noticed
         self.phone.send({"type": "listen", "on": bool(self.listeners)})
+        if self.analysis:
+            self.phone.send(self._analysis_message())
         return self.phone
 
     def disconnect_phone(self, phone: PhoneAudio) -> None:
@@ -259,10 +274,14 @@ class AudioRelay:
     def phone_audio(self, chunk: bytes) -> None:
         if not chunk or len(chunk) > MAX_CHUNK_BYTES or len(chunk) % 2:
             return
+        self.audio_time = time.time()
         for q in self.listeners:
             if q.full():
                 q.get_nowait()
             q.put_nowait(chunk)
+        analyse = self.analyse
+        if self.analysis and analyse is not None:
+            analyse(chunk)
 
     def take_levels(self) -> list[tuple[float, float]]:
         out = []
@@ -326,6 +345,33 @@ class AudioRelay:
             self.listeners.remove(q)
             if not self.listeners:
                 self.send_to_phone({"type": "listen", "on": False})
+
+    # ---- analysis -----------------------------------------------------------------------
+    def want(self, purpose: str, on: bool) -> None:
+        """Asks the phone for its microphone for the server's own use ("sounds" or "speech"), or stops
+        asking. The phone sends it while anything wants it: about 32 kB/s. Safe to call from any thread."""
+        if on == (purpose in self.analysis):
+            return
+        self.analysis = self.analysis | {purpose} if on else self.analysis - {purpose}
+        message = self._analysis_message()
+        loop = self._loop
+        try:
+            if loop is None or asyncio.get_running_loop() is loop:
+                self.send_to_phone(message)
+                return
+        except RuntimeError:
+            pass  # not on any loop: a camera thread
+        try:
+            loop.call_soon_threadsafe(self.send_to_phone, message)
+        except RuntimeError:
+            pass  # the server is shutting down
+
+    def _analysis_message(self) -> dict:
+        return {"type": "analyse", "sounds": "sounds" in self.analysis, "speech": "speech" in self.analysis}
+
+    def streaming(self, now: float | None = None) -> bool:
+        """The phone is sending its microphone, not just levels."""
+        return (time.time() if now is None else now) - self.audio_time < MIC_FRESH_SECONDS
 
     # ---- reporting ----------------------------------------------------------------------
     def status(self, now: float | None = None) -> dict:

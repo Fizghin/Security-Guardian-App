@@ -9,6 +9,9 @@ Threat escalation for one camera.
 
 People the tracker is still identifying ("pending") do not start an incident,
 so a resident walking up to the camera is recognised before anything is said.
+A high-severity sound heard while armed (breaking glass, a scream...) raises the
+camera to level 3 and records even with nobody on camera; nothing is spoken until
+someone is seen, and such an incident ends SOUND_HOLD_SECONDS after the sound.
 Strangers who are remembered visitors are noted in the log and in the alert.
 A stranger at a time the camera is usually quiet (its learned routine) is noted
 as unusual, and the owner can be alerted about it straight away.
@@ -39,6 +42,7 @@ ALERT_REPEAT_SECONDS = 120
 INSIDER_LOG_SECONDS = 300
 PRESENCE_SECONDS = 3  # no voice warnings once nobody has been seen for this long
 UNUSUAL_ALERT_SECONDS = 600  # alerts about strangers at unusual times, per camera
+SOUND_HOLD_SECONDS = 30  # an incident a sound started lasts at least this long after the sound
 
 
 def voice_cooldown(persistence: int) -> float:
@@ -77,6 +81,10 @@ class CameraBrain:
         self._seen_before: dict[int, str] = {}  # visitor id -> "seen before" note, this incident
         self.unusual = False  # this incident started at a time the camera is usually quiet
         self._unusual_alert_time: float | None = None
+        self._presence_start: float | None = None  # when an unrecognised person was first seen, this incident
+        self._heard: str | None = None  # a sound that raised this incident, e.g. "Glass breaking"
+        self._heard_until = 0.0
+        self.on_said: Callable[[str, str], None] = lambda text, source: None  # every line spoken in an incident
 
         self.persons = 0
         self.pending = 0
@@ -98,6 +106,15 @@ class CameraBrain:
     @property
     def incident_active(self) -> bool:
         return self.incident_start is not None
+
+    @property
+    def incident_id(self) -> int:
+        return self._incident_id
+
+    @property
+    def intrusion(self) -> bool:
+        """An incident with an unrecognised person seen on camera (not a panic, not just a sound)."""
+        return self.incident_start is not None and not self.manual and self._presence_start is not None
 
     def _log(self, event_type: str, description: str, severity: str = "INFO", recording: str | None = None,
              insider: str | None = None) -> None:
@@ -146,6 +163,8 @@ class CameraBrain:
             if unknown and cfg.armed:
                 if self.incident_start is None:
                     self._begin_incident(now, simulated=all(d.simulated for d in unknown))
+                if self._presence_start is None:  # a new incident, or one a sound started
+                    self._presence_start = now
                     who = "Unrecognised person" if len(unknown) == 1 else f"{len(unknown)} unrecognised people"
                     seen = self._returning(unknown)
                     quiet = self._unusual_time(now, cfg.learning.unusual_activity)
@@ -239,18 +258,22 @@ class CameraBrain:
         self.picture_event = None
         self._seen_before = {}
         self.unusual = False
+        self._presence_start = None
+        self._heard, self._heard_until = None, 0.0
 
     def _update(self, now: float) -> None:
         if self.incident_start is None:
             return
         esc = self.settings.get().escalation
-        if not self.manual and (self.last_seen is None or now - self.last_seen >= esc.clear_after):
-            self._end_incident(now, "Person left the area")
+        quiet = self.last_seen is None or now - self.last_seen >= esc.clear_after
+        if not self.manual and quiet and now >= self._heard_until:
+            self._end_incident(now, "Person left the area" if self._presence_start is not None
+                               else "Nobody was seen after the sound")
             return
-        if not self.manual:
+        if not self.manual and self._presence_start is not None and self.last_seen is not None:
             # Only time the person was actually on camera counts; a level must not climb
             # while the scene is empty and the incident is waiting to clear.
-            elapsed = self.last_seen - self.incident_start
+            elapsed = self.last_seen - self._presence_start
             level = 1 + (elapsed >= esc.level2_after) + (elapsed >= esc.level3_after) + (elapsed >= esc.level4_after)
             if level > self.threat_level:
                 self.threat_level = level
@@ -291,9 +314,15 @@ class CameraBrain:
             self.last_alert_time = now
             prefix = "[TEST] " if self.simulated else ""
             msg = f"Unrecognised person at {camera} for {seconds}s. Threat level {level} ({LEVEL_NAMES[level]})."
+            title = f"{prefix}Intruder at {camera}"
+            if self._presence_start is None and self._heard:
+                msg = f"Nobody seen on camera yet. Threat level {level} ({LEVEL_NAMES[level]})."
+                title = f"{prefix}{self._heard} at {camera}"
+            if self._heard:
+                msg = f"{self._heard} heard at {camera}. {msg}"
             if self._seen_before:
                 msg += f" {'; '.join(self._seen_before.values())}."
-            if self.notifier.send_alert(f"{prefix}Intruder at {camera}", msg, SEVERITY[level], self.snapshot()):
+            if self.notifier.send_alert(title, msg, SEVERITY[level], self.snapshot()):
                 self._alerted = True
                 self._log("ALERT", f"Owner alerted: {msg}", SEVERITY[level])
 
@@ -306,7 +335,9 @@ class CameraBrain:
             return  # the panic warning is spoken by the CameraManager on every camera
         if self.speaker.paused():
             return  # the owner is talking through this camera; warnings carry on when they stop
-        someone_there = self.last_seen is not None and now - self.last_seen <= PRESENCE_SECONDS
+        # Nothing is said to a sound, or to someone still being identified after one.
+        someone_there = (self._presence_start is not None and self.last_seen is not None
+                         and now - self.last_seen <= PRESENCE_SECONDS)
         due = now - self.last_ai_time >= voice_cooldown(cfg.ai.persistence)
         if not someone_there or not (level > self._spoken_level or due):
             return
@@ -342,11 +373,46 @@ class CameraBrain:
         ai = self.settings.get().ai
         if ai.voice_enabled:
             self.speaker.say(text, ai.voice_rate)
+        self.on_said(text, result["source"])
         via = {"llm": f"via {result.get('model')}", "cached": f"prepared by {result.get('model') or 'the model'}",
                "fallback": f"pre-written line: {result.get('error') or 'model unavailable'}"
                }.get(result["source"], result["source"])
         latency = f", {result['latency_ms']} ms" if result.get("latency_ms") else ""
-        self._log("VOICE", f"{text} ({via}{latency})")
+        self._log("VOICE", f"{'Replied: ' if result.get('reply') else ''}{text} ({via}{latency})")
+
+    def reply(self, result: dict, incident: int) -> bool:
+        """Speaks the Guard Bot's answer to what the person said, as one of this incident's warnings."""
+        with self._lock:
+            if incident != self._incident_id or self.incident_start is None or self.manual:
+                return False
+            self.last_ai_time = self.clock()  # the next routine warning waits its turn
+        self._deliver({**result, "reply": True}, incident)
+        return True
+
+    def sound_alarm(self, what: str, now: float | None = None) -> bool:
+        """A high-severity sound heard while armed, e.g. "Glass breaking": the camera goes to level 3 and
+        records, even with nobody on camera. Returns True when it raised the level (the alert then follows
+        the escalation settings); False when disarmed, during a panic, already at level 3 or more, or when
+        a recognised insider is in view and nobody unrecognised."""
+        now = self.clock() if now is None else now
+        with self._lock:
+            if not self.armed or self.manual or (self.insiders_in_view and self._presence_start is None):
+                return False
+            if self.incident_start is None:
+                self._begin_incident(now)
+                self.last_seen = None  # nobody seen yet
+            self._heard, self._heard_until = what, max(self._heard_until, now + SOUND_HOLD_SECONDS)
+            if self.threat_level >= 3:
+                return False
+            self.threat_level = 3
+            self._peak = max(self._peak, 3)
+            fresh = not self.recorder.active
+            started = self.recorder.start("sound", 3)
+            self._log("ESCALATION", f"Threat level 3 ({LEVEL_NAMES[3]}): {what.lower()} heard", SEVERITY[3])
+            if started and fresh:
+                self._log("RECORDING", "Recording started", recording=started)
+            self._update(now)
+            return True
 
     def _end_incident(self, now: float, reason: str) -> None:
         duration = int(now - (self.incident_start or now))
@@ -362,6 +428,8 @@ class CameraBrain:
         self.picture_event = None
         self._seen_before = {}
         self.unusual = False
+        self._presence_start = None
+        self._heard, self._heard_until = None, 0.0
         if self._siren_fired:
             self.speaker.siren(False)
         self._siren_fired = False
@@ -388,6 +456,7 @@ class CameraBrain:
         ai = self.settings.get().ai
         if ai.voice_enabled:
             self.speaker.say(text, ai.voice_rate)
+        self.on_said(text, source)
 
     def reset(self, reason: str = "Alarm reset") -> bool:
         with self._lock:
@@ -407,10 +476,13 @@ class CameraBrain:
         with self._lock:
             self._set_message(text, "operator")
         self._log("VOICE", f"{text} (typed by operator)")
-        return self.speaker.say(text, ai.voice_rate, interrupt=True)
+        spoken = self.speaker.say(text, ai.voice_rate, interrupt=True)
+        if spoken:
+            self.on_said(text, "operator")
+        return spoken
 
     def _on_recording_finished(self, info: dict) -> None:
-        label = {"panic": "panic", "test": "test", "intruder": "intrusion", "sound": "loud sound"}.get(info["reason"],
+        label = {"panic": "panic", "test": "test", "intruder": "intrusion", "sound": "sound"}.get(info["reason"],
                                                                                                      info["reason"])
         peak = f" (peak level {info['max_level']})" if info["max_level"] else ""
         self._log("CLIP_SAVED", f"Saved {info['duration']}s {label} clip{peak}", recording=info["file"])
@@ -440,4 +512,5 @@ class CameraBrain:
                 "last_message": self.last_message,
                 "last_message_time": self.last_message_time,
                 "last_message_source": self.last_message_source,
+                "heard": self._heard,
             }

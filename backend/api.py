@@ -24,6 +24,7 @@ from services.event_service import event_service
 from services.face_service import FaceError, face_service
 from services.learning_service import LearningError, learning_service
 from services.heatmap_service import KEEP_DAYS as HEATMAP_DAYS, heatmap_service
+from services.guard_bot import speech_to_text
 from services.notification_service import ChannelError, notification_service
 from services.phone_service import lan_addresses, pairing_urls, phone_hub, qr_svg
 from services.pose_service import pose_service
@@ -32,6 +33,7 @@ from services.routine_service import routine_service
 from services.schedule_service import time_zone
 from services.settings_service import PHONE_SOURCE, NotificationSettings, SettingsError, new_token, settings_service
 from services.siren_service import siren_service
+from services.sound_recognition import sound_model
 from services.sources import grab_test_frame, parse_source, scan_local_cameras
 from services.system_service import system_stats
 from services.talk_service import TalkError, audio_hub, talk_player, talk_player_status
@@ -518,7 +520,9 @@ def phone_heartbeat(beat: Heartbeat, request: Request, k: str = ""):
 async def phone_audio(websocket: WebSocket, k: str = ""):
     """The phone's audio link. Phone to server: {"type": "level", "db": peak dBFS} about 4 times a second
     while its microphone is on, and microphone PCM while asked to. Server to phone: {"type": "listen",
-    "on": bool} and the owner's voice as PCM (both 16 kHz 16-bit mono)."""
+    "on": bool} (someone listens), {"type": "analyse", "sounds": bool, "speech": bool} (the server wants the
+    microphone to recognise sounds, or to hear a person during an intrusion) and the owner's voice as PCM
+    (both 16 kHz 16-bit mono)."""
     await websocket.accept()
     link = phone_hub.authenticate(k)
     if link is None:
@@ -932,6 +936,30 @@ async def ai_test(req: AITestRequest):
     if req.speak:
         result["spoken"] = tts_service.say(result["text"], settings_service.get().ai.voice_rate, interrupt=True)
     return result
+
+
+# ---- models for listening: speech-to-text (Guard Bot) and sound recognition -------------------
+def _audio_models() -> dict:
+    return {"speech": speech_to_text.status(settings_service.get().ai.stt_model), "sounds": sound_model.status()}
+
+
+@router.get("/audio-models")
+def audio_models():
+    return _audio_models()
+
+
+@router.post("/audio-models/{what}/download")
+def download_audio_model(what: str):
+    """Downloads (if needed) and loads a model in the background; progress shows in GET /audio-models."""
+    if what == "speech":
+        started = speech_to_text.prepare(settings_service.get().ai.stt_model, retry=True)
+    elif what == "sounds":
+        started = sound_model.prepare(retry=True)
+    else:
+        raise HTTPException(404, "Unknown model")
+    if not started:
+        raise HTTPException(409, _audio_models()[what]["error"] or "This model can't be set up here")
+    return _audio_models()
 
 
 # ---- system ------------------------------------------------------------------------

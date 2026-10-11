@@ -13,6 +13,7 @@ echo "[1/4] Python environment"
 
 echo "[2/4] Python packages (first run downloads ~1 GB, mostly PyTorch)"
 ./venv/bin/pip install -r backend/requirements.txt
+./venv/bin/pip install -r backend/requirements-optional.txt || echo "      Sound recognition and the Guard Bot are not available on this computer (optional)"
 [ -f backend/.env ] || { cp backend/.env.template backend/.env; echo "      Created backend/.env"; }
 
 echo "[3/4] Dashboard"

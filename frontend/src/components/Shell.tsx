@@ -224,7 +224,9 @@ function AlarmBanner() {
       <span>
         {status.panic || !worst
           ? 'Panic alarm active'
-          : `${LEVELS[worst.threat_level].label} at ${worst.name}: unrecognised person for ${formatDuration(worst.incident_seconds)}`}
+          : worst.heard && !worst.manual_alarm && !worst.guard_bot?.active // raised by a sound, with nobody seen yet
+            ? `${LEVELS[worst.threat_level].label} at ${worst.name}: ${worst.heard.toLowerCase()} heard, nobody seen on camera (${formatDuration(worst.incident_seconds)})`
+            : `${LEVELS[worst.threat_level].label} at ${worst.name}: unrecognised person for ${formatDuration(worst.incident_seconds)}`}
         {!status.panic && alarming.length > 1 && ` (+${alarming.length - 1} more)`}
         {worst?.test && ' (test)'}
         {siren && ' · siren sounding'}

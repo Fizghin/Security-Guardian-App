@@ -161,16 +161,19 @@
 
   // ---- microphone and the owner's voice ----------------------------------------------
   // One WebSocket carries the microphone level (for loud-sound alerts), the microphone itself while
-  // the owner listens, and the owner's voice while they talk. Audio is 16-bit mono at 16 kHz.
+  // the owner listens or Guardian asks for it (to recognise sounds, or to hear and answer a person
+  // during an intrusion), and the owner's voice while they talk. Audio is 16-bit mono at 16 kHz.
   var RATE = 16000, CHUNK = 1600;
   var mic = null, micSource = null, micNode = null, micState = "off", link = null, linkRetry = 1000;
-  var listening = false, peak = 0, peakSamples = 0, pcm = null, pcmLen = 0, dsSum = 0, dsCount = 0, dsPos = 0;
+  var listening = false, analyseSounds = false, analyseSpeech = false, peak = 0, peakSamples = 0, pcm = null, pcmLen = 0, dsSum = 0, dsCount = 0, dsPos = 0;
   var playAt = 0, voiceUntil = 0, buffers16k = true;
 
   function updateMic() {
     var text = micState === "unsupported" ? "No microphone in this browser" :
       micState === "asking" ? "Asking for the microphone…" : "Microphone off";
-    if (micState === "on") text = paused ? "Microphone paused" : listening ? "Microphone on: the owner is listening" : "Microphone on";
+    if (micState === "on") text = paused ? "Microphone paused" : listening ? "Microphone on: the owner is listening" :
+      analyseSpeech ? "Microphone on: Guardian is listening and may answer" :
+      analyseSounds ? "Microphone on: Guardian listens for sounds" : "Microphone on";
     $("micRow").className = "status " + (micState === "on" && !paused ? "ok" : "warn");
     $("micText").textContent = text;
     $("micBtn").style.display = $("micHint").style.display = micState === "denied" ? "" : "none";
@@ -222,7 +225,7 @@
       link.send(JSON.stringify({ type: "level", db: Math.round(v * 10) / 10 }));
       peak = peakSamples = 0;
     }
-    if (listening) downsample(input);
+    if (listening || analyseSounds || analyseSpeech) downsample(input);
   }
 
   function downsample(input) {
@@ -300,11 +303,15 @@
         listening = !!m.on;
         pcm = null;
         updateMic();
+      } else if (m && m.type === "analyse") {
+        analyseSounds = !!m.sounds;
+        analyseSpeech = !!m.speech;
+        updateMic();
       }
     };
     ws.onclose = function (e) {
       if (link === ws) link = null;
-      listening = false;
+      listening = analyseSounds = analyseSpeech = false;
       updateMic();
       if (e.code === 4000) showMsg("This camera page is open somewhere else too; sound goes to that one.", true);
       // 4401: the pairing link is no longer valid, which sending frames reports
