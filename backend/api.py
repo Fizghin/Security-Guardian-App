@@ -888,6 +888,7 @@ def get_settings():
 def patch_settings(patch: dict):
     patch.pop("armed", None)    # arming goes through /api/arm so it is logged
     patch.pop("cameras", None)  # cameras have their own endpoints
+    patch.pop("map", None)      # and so does the property map
     if isinstance(patch.get("ai"), dict):
         patch["ai"].pop("api_key_set", None)
     if isinstance(patch.get("notifications"), dict):

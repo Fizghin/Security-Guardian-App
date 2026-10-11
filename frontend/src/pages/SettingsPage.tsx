@@ -20,6 +20,7 @@ import VaultPanel from '../components/VaultPanel'
 import { cx } from '../lib/cx'
 import { describeSchedule, formatBytes, formatUptime } from '../lib/format'
 import { href } from '../lib/route'
+import { mapApi, type MapInfo } from '../lib/mapApi'
 import { useStatus } from '../lib/status'
 import { errorMessage, useToast } from '../lib/toast'
 import { usePoll } from '../lib/usePoll'
@@ -1124,9 +1125,42 @@ function SystemSection() {
   )
 }
 
+// ---- Property map -------------------------------------------------------------------------------
+function MapSection() {
+  const [info, setInfo] = useState<MapInfo | null>(null)
+  useEffect(() => {
+    mapApi.get().then(setInfo, () => setInfo(null))
+  }, [])
+  const placed = info?.cameras.filter((c) => c.calibration) ?? []
+  const state = !info
+    ? null
+    : !info.image
+      ? 'Not set up.'
+      : `${info.image === 'grid' ? 'Blank grid' : 'Floorplan picture'}, ${info.metres_per_px ? 'scale set' : 'scale not set'}, ${placed.length} of ${info.cameras.length} cameras placed${placed.length ? ` (${placed.map((c) => c.name).join(', ')})` : ''}.`
+  return (
+    <Section
+      id="map"
+      title="Property map"
+      description="A view from above of where people are, joined up across cameras. The floorplan, its scale and where each camera looks are set on the Map page."
+      extraActions={
+        <a href={href('map', 'setup')} className="inline-flex h-9 items-center rounded-md border border-zinc-700 bg-zinc-900 px-3.5 text-sm font-medium text-zinc-100 hover:bg-zinc-800">
+          Set up the map
+        </a>
+      }
+    >
+      {state && <p className="text-sm text-zinc-300">{state}</p>}
+      <p className="hint">
+        People seen by two cameras within 1.5 m of each other at the same moment count as one person. Someone who leaves one camera and appears on another
+        keeps their number if they could have walked there (3 m/s at most), and a recognised face always decides who it is.
+      </p>
+    </Section>
+  )
+}
+
 // ---- Page ------------------------------------------------------------------------------------
 const SECTIONS = [
   ['cameras', 'Cameras'],
+  ['map', 'Property map'],
   ['schedule', 'Schedule'],
   ['ai', 'Language model'],
   ['guard-bot', 'Guard Bot'],
@@ -1187,6 +1221,7 @@ export default function SettingsPage({ section }: { section: string }) {
       </nav>
       <div className="min-w-0 space-y-4">
         <CamerasSection key={k(settings.phone)} phoneSettings={settings.phone} savePhone={(phone) => save({ phone })} />
+        <MapSection />
         <ScheduleSection key={k(settings.schedule)} value={settings.schedule} save={save} status={status} />
         <ModelSection key={k({ ...modelFields(settings.ai), key: settings.ai.api_key_set })} value={settings.ai} save={save} />
         <GuardBotSection key={k(guardFields(settings.ai))} value={settings.ai} save={save} />

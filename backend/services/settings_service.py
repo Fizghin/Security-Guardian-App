@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from config import SETTINGS_FILE, env_str
+from services.floorplan import clean_pairs
 from services.zones import clean_zone
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434"
@@ -63,6 +64,9 @@ class CameraConfig(BaseModel):
     zones_aspect: float | None = Field(None, ge=0.1, le=10)
     # Named areas that should look as usual (a gate, a door, a window); see services/spot_watch.py.
     watch_spots: list[WatchSpot] = Field(default_factory=list)
+    # Calibration onto the property map: the same spots on the ground as [picture x, picture y,
+    # map x, map y], picture in 0..1 and map in floorplan pixels. Empty = not on the map.
+    map_points: list[list[float]] = Field(default_factory=list)
 
     @field_validator("zones")
     @classmethod
@@ -80,6 +84,11 @@ class CameraConfig(BaseModel):
         if len(set(names)) != len(names):
             raise ValueError("Each watch spot needs its own name")
         return spots
+
+    @field_validator("map_points")
+    @classmethod
+    def _map_points(cls, pairs: list[list[float]]):
+        return clean_pairs(pairs)
 
     @property
     def is_phone(self) -> bool:
@@ -225,6 +234,23 @@ class ScheduleRule(BaseModel):
         return self
 
 
+class MapSettings(BaseModel):
+    # The floorplan in DATA_DIR/map/, "grid" for a blank grid, or "" before the map is set up.
+    image: str = Field("", pattern=r"^(|grid|floorplan-\d+\.(png|jpg))$")
+    width: int = Field(0, ge=0, le=8000)  # the picture's size in pixels
+    height: int = Field(0, ge=0, le=8000)
+    metres_per_px: float | None = Field(None, gt=0, le=100)  # None until the scale is set
+    # The two points the scale was set with and the distance between them: [x1, y1, x2, y2, metres]
+    scale_line: list[float] = Field(default_factory=list)
+
+    @field_validator("scale_line")
+    @classmethod
+    def _scale_line(cls, line: list[float]):
+        if line and len(line) != 5:
+            raise ValueError("The scale line is [x1, y1, x2, y2, metres]")
+        return line
+
+
 class ScheduleSettings(BaseModel):
     enabled: bool = False
     rules: list[ScheduleRule] = Field(default_factory=list, max_length=14)
@@ -308,6 +334,7 @@ class Settings(BaseModel):
     learning: LearningSettings = LearningSettings()
     notifications: NotificationSettings = NotificationSettings()
     briefing: BriefingSettings = BriefingSettings()
+    map: MapSettings = MapSettings()
 
     @field_validator("cameras")
     @classmethod
@@ -417,6 +444,13 @@ def _migrate(overrides: dict) -> dict:
                 except (TypeError, ValueError) as exc:
                     print(f"[settings] Dropping a zone of camera {cam.get('id')}: {exc}")
             cam["zones"] = kept
+        pairs = cam.get("map_points") if isinstance(cam, dict) else None
+        if pairs:
+            try:
+                clean_pairs(pairs)
+            except (TypeError, ValueError) as exc:
+                print(f"[settings] Taking camera {cam.get('id')} off the property map: {exc}")
+                cam["map_points"] = []
     return overrides
 
 

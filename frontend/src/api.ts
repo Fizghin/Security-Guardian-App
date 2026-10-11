@@ -658,7 +658,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-const json = (method: string, body?: unknown): RequestInit => ({
+export const json = (method: string, body?: unknown): RequestInit => ({
   method,
   headers: { 'Content-Type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
@@ -672,7 +672,7 @@ const query = (params: Record<string, string | number | undefined>) => {
 }
 
 const cam = (id: string) => `/api/cameras/${encodeURIComponent(id)}`
-const socketUrl = (path: string) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`
+export const socketUrl = (path: string) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`
 
 export const api = {
   status: () => request<Status>('/api/status'),

@@ -40,6 +40,7 @@ from services.heatmap_service import heatmap_service
 from services.guard_bot import GuardBot
 from services.notification_service import notification_service
 from services.phone_service import phone_hub
+from services.property_map import property_map
 from services.recording_service import Recorder, recording_library
 from services.routine_service import routine_service
 from services.schedule_service import AppliedEvent, last_event, next_change
@@ -368,6 +369,7 @@ class CameraUnit:
             self.visitors.annotate(self.id, detections, evidence, now, det.face_match_threshold)
         self._detections, self._detections_time = detections, now
         watched = [d for d in detections if not d.ignored]
+        property_map.observe(self.id, watched, frame.shape[1], frame.shape[0], now)
         self._judging = [frame, detections, None]
         self._judged = (frame.shape[1], frame.shape[0], watched)
         try:
